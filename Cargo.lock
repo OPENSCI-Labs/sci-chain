@@ -3318,6 +3318,7 @@ dependencies = [
  "reth-evm",
  "revm",
  "rstest",
+ "sci-precompiles",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -19816,6 +19817,49 @@ dependencies = [
 ]
 
 [[package]]
+name = "sci-precompile-abi"
+version = "0.9.0"
+dependencies = [
+ "alloy-primitives",
+ "alloy-sol-types",
+ "serde",
+]
+
+[[package]]
+name = "sci-precompiles"
+version = "0.9.0"
+dependencies = [
+ "alloy-consensus",
+ "alloy-evm",
+ "alloy-primitives",
+ "alloy-signer",
+ "alloy-signer-local",
+ "alloy-sol-types",
+ "base-common-chains",
+ "base-common-evm",
+ "derive_more 2.1.1",
+ "eyre",
+ "proptest",
+ "revm",
+ "sci-precompile-abi",
+ "sci-precompiles-macros",
+ "scoped-tls",
+ "tempo-chainspec-shim",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
+name = "sci-precompiles-macros"
+version = "0.9.0"
+dependencies = [
+ "alloy-primitives",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
+
+[[package]]
 name = "scoped-tls"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -22221,6 +22265,13 @@ dependencies = [
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "tempo-chainspec-shim"
+version = "0.9.0"
+dependencies = [
+ "revm",
 ]
 
 [[package]]

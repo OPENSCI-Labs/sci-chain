@@ -25,6 +25,9 @@ base-common-chains.workspace = true
 base-common-precompiles.workspace = true
 base-common-consensus = { workspace = true, features = ["evm"] }
 
+# sci
+sci-precompiles.workspace = true
+
 # revm
 revm.workspace = true
 

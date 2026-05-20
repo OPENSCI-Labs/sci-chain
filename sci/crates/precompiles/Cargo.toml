@@ -1,0 +1,50 @@
+[package]
+name = "sci-precompiles"
+description = "SCI Chain EVM precompile implementations: AccountKeychain for session keys and spending limits"
+
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+revm.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+scoped-tls = "1.0"
+derive_more = { workspace = true, default-features = false }
+
+alloy-evm = { workspace = true, features = ["std"] }
+alloy-primitives.workspace = true
+alloy-sol-types = { workspace = true, features = ["std"] }
+alloy-consensus.workspace = true
+
+# Cargo `package = ...` renames so ported Tempo source compiles verbatim.
+# `tempo-contracts` actually pulls in `sci-precompile-abi`; `tempo-precompiles-macros`
+# pulls in `sci-precompiles-macros`. See workspace Cargo.toml.
+tempo-chainspec.workspace = true
+tempo-contracts.workspace = true
+tempo-precompiles-macros.workspace = true
+
+[dev-dependencies]
+eyre.workspace = true
+proptest.workspace = true
+alloy-signer.workspace = true
+alloy-signer-local.workspace = true
+alloy-primitives = { workspace = true, features = ["rand"] }
+# Integration tests drive SciHandler through BaseEvm + InMemoryDB. This is dev-only;
+# the lib itself does not depend on base-common-evm (which would create a cycle).
+base-common-evm.workspace = true
+# Needed by hook_e2e.rs to construct `BaseSpecId::new(BaseUpgrade::Isthmus)` (Base v0.9
+# replaced the v0.8 `BaseSpecId::ISTHMUS` const with this builder pattern).
+base-common-chains.workspace = true
+
+[features]
+default = []
+test-utils = []
+# Opt-in: exercises EvmPrecompileStorageProvider against a real EvmFactory. Off by default
+# because it pulls heavyweight EVM-factory deps into the test profile.
+evm-bridge-tests = []
