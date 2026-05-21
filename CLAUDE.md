@@ -130,6 +130,14 @@ sci-chain/
      field. `JournalCheckpoint` lost the `selfdestructed_i` field.
    - All `::alloy::primitives::*` / `::alloy::sol_types::*` / `::alloy::consensus::*`
      paths in ported code use the individual crates (`alloy_primitives::`, etc.).
+7. **Docs committed to the repository must be written in English.** This applies to
+   every `.md` under version control (CLAUDE.md, READMEs, `sci/docs/**` except
+   `analysis/`, design notes, PR descriptions, commit messages). Inline code
+   comments and identifiers follow the same rule. Transient working notes,
+   intermediate analyses, and personal scratchpads belong in `sci/docs/analysis/`
+   which is **gitignored** — use any language there. The purpose of the rule is
+   to keep the public-facing repo legible to non-Chinese-speaking contributors,
+   while still allowing fast Chinese-language iteration during development.
 
 ## Upstream Tempo Sync
 
