@@ -1,0 +1,29 @@
+# SCI Chain devnet compose override.
+#
+# Layers on top of etc/docker/docker-compose.yml. Overrides only the images
+# of EVM-execution services (base-client, base-builder) to point at SCI-built
+# binaries. All other service definitions (ports, volumes, deps, healthchecks,
+# entrypoint, command) inherit from the base file unchanged.
+#
+# Usage from `~/sci-dev/base-v0.8/` (the running devnet stack):
+#
+#   docker compose \
+#     --env-file etc/docker/devnet-env \
+#     -f etc/docker/docker-compose.yml \
+#     -f ../sci-chain/sci/devnet/docker-compose.sci.yml \
+#     up -d --no-build --no-deps --force-recreate base-client base-builder
+#
+# Rollback: drop the second `-f` and force-recreate again — services go back
+# to `base-reth-node:local` / `base-builder:local` (pure base original).
+#
+# Tag convention:
+#   :local            = pure base original (rollback target)
+#   :sci              = SCI release build (this override targets it)
+#   :sci-dev-broken   = forensic artifact of a known-bad build, do not run
+
+services:
+  base-client:
+    image: base-reth-node:sci
+
+  base-builder:
+    image: base-builder:sci
