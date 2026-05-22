@@ -36,6 +36,13 @@ pub enum HookOutcome<E> {
     Reject(E),
 }
 
+/// OP-Stack deposit transaction type. Hardcoded here (rather than imported from
+/// `base-common-evm`) because `sci-precompiles` must not depend back on Base — the
+/// crate is consumed by `base-common-evm::factory`. The wrapper (`SciHandler`) is the
+/// primary gate for skipping deposits; this constant exists so the hook can do the same
+/// check defensively when called from contexts that don't filter upstream.
+const DEPOSIT_TX_TYPE: u8 = 0x7E;
+
 /// Runs the SCI Chain pre-execution hook over the current tx in `evm`.
 ///
 /// Errors of type `ERROR` are only returned for system-level failures (database errors,
@@ -44,13 +51,20 @@ pub enum HookOutcome<E> {
 /// `ERROR::from_string` so the wrapper can route it through revm's standard tx-error
 /// pipeline.
 ///
-/// Skipping deposit txs is the wrapper's responsibility — this function does not look at
-/// `tx_type()` (which is Op-stack specific) and runs unconditionally.
+/// Deposit (system) txs short-circuit at the top as a defensive measure — the primary
+/// deposit gate lives in [`SciHandler::validate_against_state_and_deduct_caller`], but
+/// repeating the check here means a future caller that invokes the hook directly (a
+/// custom handler, a test harness) still does the right thing.
 pub fn run_pre_execution_hook<EVM, ERROR>(evm: &mut EVM) -> Result<HookOutcome<ERROR>, ERROR>
 where
     EVM: EvmTr<Context: ContextTr<Db: AlloyDatabase, Journal: JournalTr<Database: AlloyDatabase> + Debug>>,
     ERROR: From<<<EVM::Context as ContextTr>::Db as Database>::Error> + FromStringError,
 {
+    // ----- 0. Defensive deposit-tx skip (primary gate is in SciHandler). -----
+    if evm.ctx().tx().tx_type() == DEPOSIT_TX_TYPE {
+        return Ok(HookOutcome::Pass);
+    }
+
     // ----- 1. Snapshot tx fields before borrowing the journal -----
     let (target_kind, caller, input) = {
         let ctx = evm.ctx();
@@ -200,41 +214,20 @@ where
 /// delivering Q4 strong-R1 semantics.
 ///
 /// The agent-tx signal carried across handler methods is the keychain's transient
-/// `transaction_key` slot: the pre-execution hook sets it to the session key, this
-/// function reads it. A zero value means "not an agent tx" and we exit immediately.
+/// `transaction_key` slot: the pre-execution hook sets it to the session key iff it
+/// already verified the 7702 delegation + active access key, and this function reads
+/// it. A zero value means "not an agent tx" (the hook either didn't fire or saw a
+/// non-agent tx) and we exit immediately. Because the transient slot already encodes
+/// "hook accepted this tx as agent traffic", we do not re-read the 7702 delegation
+/// header here.
 pub fn apply_post_execution_deductions<EVM, ERROR>(evm: &mut EVM) -> Result<(), ERROR>
 where
     EVM: EvmTr<Context: ContextTr<Db: AlloyDatabase, Journal: JournalTr<Database: AlloyDatabase> + Debug>>,
     ERROR: From<<<EVM::Context as ContextTr>::Db as Database>::Error> + FromStringError,
 {
-    // Snapshot tx fields the same way pre-execution did.
-    let (target_kind, _caller, input) = {
-        let ctx = evm.ctx();
-        let tx = ctx.tx();
-        (tx.kind(), tx.caller(), tx.input().clone())
-    };
-    let target = match target_kind {
-        TxKind::Call(t) => t,
-        TxKind::Create => return Ok(()),
-    };
-
-    // Re-check 7702 delegation. Cheaper than persisting a flag across handler methods.
-    let delegate = {
-        let acct = evm.ctx().journal_mut().load_account_with_code_mut(target)?;
-        match acct.data.account().info.code.clone() {
-            Some(Bytecode::Eip7702(eip)) => Some(eip.delegated_address),
-            _ => None,
-        }
-    };
-    let Some(delegate) = delegate else {
-        return Ok(());
-    };
-    if delegate != SCI_AGENT_DELEGATOR_ADDRESS {
-        return Ok(());
-    }
-
-    // Read the keychain's transient `transaction_key` — set to the session key by the
-    // pre-execution hook when an agent tx was detected. Zero means "no hook fired".
+    // Read the keychain's transient `transaction_key` first — set to the session key by
+    // the pre-execution hook iff it already verified the 7702 delegation and active key.
+    // Zero means "no hook fired or not an agent tx"; bail before doing any more work.
     let session_key = enter_keychain_storage(evm.ctx(), || {
         AccountKeychain::default().transaction_key_raw()
     })
@@ -242,6 +235,19 @@ where
     if session_key.is_zero() {
         return Ok(());
     }
+
+    // Snapshot tx.to/input for the per-call decode; `target` doubles as `root` because
+    // the hook only sets `transaction_key` on a Call (the Create branch returns early
+    // there too).
+    let (target_kind, input) = {
+        let ctx = evm.ctx();
+        let tx = ctx.tx();
+        (tx.kind(), tx.input().clone())
+    };
+    let target = match target_kind {
+        TxKind::Call(t) => t,
+        TxKind::Create => return Ok(()),
+    };
     let root = target;
 
     // Re-decode batch; fall back to single-call probe for non-execute outer selectors.
