@@ -3,8 +3,8 @@
 mod account_keychain;
 pub use account_keychain::{
     AccountKeychainError, AccountKeychainEvent, IAccountKeychain, authorizeKeyCall,
-    getAllowedCallsReturn, getRemainingLimitReturn, getRemainingLimitWithPeriodCall,
-    legacyAuthorizeKeyCall,
+    authorizeKeyWithWitnessCall, getAllowedCallsReturn, getRemainingLimitReturn,
+    getRemainingLimitWithPeriodCall, legacyAuthorizeKeyCall,
 };
 
 mod common_errors;

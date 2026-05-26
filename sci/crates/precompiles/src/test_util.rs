@@ -91,7 +91,7 @@ pub fn check_selector_coverage<P: Precompile>(
 
         // New-format: reverted PrecompileOutput with an ABI-encoded UnknownFunctionSelector
         let is_unsupported_new = if let Ok(output) = &result {
-            output.reverted && UnknownFunctionSelector::abi_decode(&output.bytes).is_ok()
+            output.is_revert() && UnknownFunctionSelector::abi_decode(&output.bytes).is_ok()
         } else {
             false
         };

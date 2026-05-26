@@ -6,7 +6,6 @@
 //! consumers — both names refer to the same type.
 
 use std::{
-    borrow::Cow,
     collections::HashMap,
     sync::{Arc, LazyLock},
 };
@@ -16,32 +15,11 @@ use alloy_primitives::{Bytes, Selector, U256};
 use alloy_sol_types::{Panic, PanicKind, SolError, SolInterface};
 use revm::{
     context::journaled_state::JournalLoadError,
-    precompile::{PrecompileError, PrecompileOutput, PrecompileResult},
+    precompile::{PrecompileError, PrecompileHalt, PrecompileOutput, PrecompileResult},
 };
 use tempo_contracts::precompiles::{
     AccountKeychainError, SciAgentStateError, UnknownFunctionSelector,
 };
-
-/// Tempo-flavored "halt" reason. revm 34 doesn't have a dedicated halt variant on
-/// [`PrecompileOutput`]; instead, halts are signaled by returning an `Err(PrecompileError)`
-/// from the precompile closure. This enum is kept to match the source's call shape and is
-/// converted via [`From`] to a [`PrecompileError`] before being wrapped in `Err(..)`.
-#[derive(Debug, Clone)]
-pub enum PrecompileHalt {
-    /// Insufficient gas to complete the operation.
-    OutOfGas,
-    /// Any other halt condition (free-form message).
-    Other(Cow<'static, str>),
-}
-
-impl From<PrecompileHalt> for PrecompileError {
-    fn from(halt: PrecompileHalt) -> Self {
-        match halt {
-            PrecompileHalt::OutOfGas => Self::OutOfGas,
-            PrecompileHalt::Other(s) => Self::Other(s),
-        }
-    }
-}
 
 /// Top-level error type for all SCI Chain precompile operations.
 ///
@@ -139,9 +117,12 @@ impl TempoPrecompileError {
 
     /// ABI-encodes this error and wraps it as a reverted [`PrecompileResult`].
     ///
-    /// `_reservoir` is accepted for source-compatibility with the Tempo origin; revm 34
-    /// has no reservoir concept on `PrecompileOutput` and the value is ignored.
-    pub fn into_precompile_result(self, gas: u64, _reservoir: u64) -> PrecompileResult {
+    /// `reservoir` is accepted for source-compatibility with Tempo v1.7.1 (which
+    /// threads EIP-8037 reservoir state through every precompile path). SCI's
+    /// revm 34 stack has no reservoir, so the value is passed through to the
+    /// shim's `PrecompileOutput::{new,revert,halt}` constructors and discarded
+    /// there.
+    pub fn into_precompile_result(self, gas: u64, reservoir: u64) -> PrecompileResult {
         let bytes: Bytes = match self {
             Self::AccountKeychainError(e) => e.abi_encode().into(),
             Self::SciAgentStateError(e) => e.abi_encode().into(),
@@ -150,7 +131,10 @@ impl TempoPrecompileError {
                 panic.abi_encode().into()
             }
             Self::OutOfGas => {
-                return Err(PrecompileError::OutOfGas);
+                // v1.7.1 idiom: signal OOG via `PrecompileOutput::halt(...)`. Our
+                // shim folds this back into `Err(PrecompileError::OutOfGas)` at
+                // the `to_revm34` boundary inside `install()`.
+                return Ok(PrecompileOutput::halt(PrecompileHalt::OutOfGas, reservoir));
             }
             Self::UnknownFunctionSelector(selector) => {
                 UnknownFunctionSelector { selector: selector.into() }.abi_encode().into()
@@ -159,7 +143,7 @@ impl TempoPrecompileError {
                 return Err(PrecompileError::Fatal(msg));
             }
         };
-        Ok(PrecompileOutput::new_reverted(gas, bytes))
+        Ok(PrecompileOutput::revert(gas, bytes, reservoir))
     }
 }
 
@@ -245,7 +229,7 @@ impl<T> IntoPrecompileResult<T> for Result<T> {
         encode_ok: impl FnOnce(T) -> Bytes,
     ) -> PrecompileResult {
         match self {
-            Ok(res) => Ok(PrecompileOutput::new(gas, encode_ok(res))),
+            Ok(res) => Ok(PrecompileOutput::new(gas, encode_ok(res), reservoir)),
             Err(err) => err.into_precompile_result(gas, reservoir),
         }
     }

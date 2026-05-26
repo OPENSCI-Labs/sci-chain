@@ -11,7 +11,19 @@ rust-version.workspace = true
 workspace = true
 
 [dependencies]
-revm.workspace = true
+# revm is aliased to `sci-revm-shim`, our compat layer that exposes the v38
+# PrecompileOutput / PrecompileHalt / state-gas / reservoir API surface needed
+# by verbatim Tempo v1.7.1+ source while binding back to Base v0.9's real
+# revm 34 at the `install()` boundary via `revm::precompile::to_revm34`.
+# This alias is scoped strictly to sci-precompiles — every other workspace
+# member continues to depend on real revm 34 directly.
+#
+# Note: Cargo does not allow `package = ...` on workspace-inherited deps
+# (only `workspace = true`, `optional`, `features` are passthrough keys),
+# so this dep is declared directly with the path. The shim crate is
+# registered in the workspace `Cargo.toml` so all workspace tooling still
+# sees it via `sci-revm-shim`.
+revm = { path = "../revm-shim", package = "sci-revm-shim" }
 tracing.workspace = true
 thiserror.workspace = true
 scoped-tls = "1.0"

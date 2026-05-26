@@ -2,7 +2,20 @@
 //!
 //! Currently exposes the [`AccountKeychain`] precompile (at
 //! [`tempo_contracts::precompiles::ACCOUNT_KEYCHAIN_ADDRESS`]), which manages session keys and
-//! per-token spending limits at the protocol level.
+//! per-token spending limits at the protocol level, and the [`SciAgentState`] precompile
+//! (SCI-only CircuitBreaker trip state, at
+//! [`tempo_contracts::precompiles::SCI_AGENT_STATE_ADDRESS`]).
+//!
+//! ## revm shim
+//!
+//! This crate depends on `revm` via the `sci-revm-shim` Cargo `package = ...` rename
+//! (see `Cargo.toml`). Every `use revm::*` inside this crate resolves through the shim,
+//! which mirrors revm 38's `PrecompileOutput` / `PrecompileHalt` / state-gas API surface
+//! on top of Base v0.9's revm 34. At the [`DynPrecompile`] boundary the shim's
+//! [`revm::precompile::to_revm34`] helper folds shim-shaped outputs back into real revm 34
+//! `PrecompileResult` values (halt → `Err(PrecompileError::*)`, success/revert preserve
+//! gas + bytes). Tempo verbatim source can therefore be `cp`'d verbatim without per-file
+//! patches.
 
 #![cfg_attr(not(test), warn(unused_crate_dependencies))]
 
@@ -40,11 +53,9 @@ use revm::{
     context::CfgEnv,
     context_interface::cfg::GasParams,
     handler::EthPrecompiles,
-    precompile::{PrecompileError, PrecompileId, PrecompileOutput, PrecompileResult},
+    precompile::{PrecompileHalt, PrecompileId, PrecompileOutput, PrecompileResult, to_revm34},
     primitives::hardfork::SpecId,
 };
-
-pub use crate::error::PrecompileHalt;
 
 /// Input per word cost. Covers ABI decoding and cloning of input into call data.
 pub const INPUT_PER_WORD_COST: u64 = 6;
@@ -74,29 +85,40 @@ sol! {
 }
 
 /// Wraps an inner [`Precompile`] implementation in a stateful [`DynPrecompile`]:
-/// rejects delegatecalls, sets up a storage context, then invokes the body.
+/// rejects delegatecalls, sets up a storage context, runs the body, and folds the
+/// shim-shaped result back to revm 34's `PrecompileResult` via [`to_revm34`].
+///
+/// The `reservoir` argument threaded into the shim's `PrecompileOutput::*`
+/// constructors is always `0` and the `amsterdam_eip8037_enabled` flag passed to
+/// the storage provider is always `false` — SCI does not adopt EIP-8037 /
+/// TIP-1016 state-gas accounting (see `sci-revm-shim` crate docs).
 macro_rules! sci_precompile {
     ($id:expr, $spec:expr, $gas_params:expr, |$input:ident| $impl:expr) => {{
         let spec = $spec;
         let gas_params = $gas_params;
         DynPrecompile::new_stateful(PrecompileId::Custom($id.into()), move |$input| {
-            if !$input.is_direct_call() {
-                return Ok(PrecompileOutput::new_reverted(
+            let result: PrecompileResult = (|| -> PrecompileResult {
+                if !$input.is_direct_call() {
+                    return Ok(PrecompileOutput::revert(
+                        0,
+                        DelegateCallNotAllowed {}.abi_encode().into(),
+                        0,
+                    ));
+                }
+                let mut storage = crate::storage::evm::EvmPrecompileStorageProvider::new(
+                    $input.internals,
+                    $input.gas,
                     0,
-                    DelegateCallNotAllowed {}.abi_encode().into(),
-                ));
-            }
-            let mut storage = crate::storage::evm::EvmPrecompileStorageProvider::new(
-                $input.internals,
-                $input.gas,
-                0,
-                spec,
-                $input.is_static,
-                gas_params.clone(),
-            );
-            crate::storage::StorageCtx::enter(&mut storage, || {
-                $impl.call($input.data, $input.caller)
-            })
+                    spec,
+                    false,
+                    $input.is_static,
+                    gas_params.clone(),
+                );
+                crate::storage::StorageCtx::enter(&mut storage, || {
+                    $impl.call($input.data, $input.caller)
+                })
+            })();
+            to_revm34(result)
         })
     }};
 }
@@ -130,13 +152,19 @@ pub fn install<Spec: Copy + 'static>(precompiles: &mut PrecompilesMap, cfg: &Cfg
     let gas_params = cfg.gas_params.clone();
     precompiles.set_precompile_lookup(move |address: &Address| -> Option<DynPrecompile> {
         if *address == ACCOUNT_KEYCHAIN_ADDRESS {
+            // SCI launches at T5 from v1.7.1 onwards so the TIP-1053 key
+            // authorization witness API (`authorizeKey(_, _, _, witness)`,
+            // `burnKeyAuthorizationWitness`, `isKeyAuthorizationWitnessBurned`)
+            // is reachable. The selector schedule in `account_keychain/dispatch.rs`
+            // still gates the T5 selectors behind `is_t5()`, so this is the
+            // single switch that turns the feature on/off chain-wide.
             Some(AccountKeychain::create_precompile(
-                TempoHardfork::T3,
+                TempoHardfork::T5,
                 gas_params.clone(),
             ))
         } else if *address == SCI_AGENT_STATE_ADDRESS {
             Some(SciAgentState::create_precompile(
-                TempoHardfork::T3,
+                TempoHardfork::T5,
                 gas_params.clone(),
             ))
         } else {
@@ -177,9 +205,10 @@ pub(crate) fn mutate<T: SolCall>(
     f: impl FnOnce(Address, T) -> Result<T::Return>,
 ) -> PrecompileResult {
     if StorageCtx.is_static() {
-        return Ok(PrecompileOutput::new_reverted(
+        return Ok(PrecompileOutput::revert(
             0,
             StaticCallNotAllowed {}.abi_encode().into(),
+            0,
         ));
     }
     f(sender, call).into_precompile_result(0, 0, |ret| T::abi_encode_returns(&ret).into())
@@ -193,22 +222,28 @@ pub(crate) fn mutate_void<T: SolCall>(
     f: impl FnOnce(Address, T) -> Result<()>,
 ) -> PrecompileResult {
     if StorageCtx.is_static() {
-        return Ok(PrecompileOutput::new_reverted(
+        return Ok(PrecompileOutput::revert(
             0,
             StaticCallNotAllowed {}.abi_encode().into(),
+            0,
         ));
     }
     f(sender, call).into_precompile_result(0, 0, |()| Bytes::new())
 }
 
 /// Deducts the calldata input cost, returning an OOG halt result if insufficient gas.
+///
+/// The shim's `halt_output(PrecompileHalt::OutOfGas)` returns an `Ok(PrecompileOutput)`
+/// carrying the halt status; the boundary [`to_revm34`] step folds it back to
+/// `Err(PrecompileError::OutOfGas)` for revm 34. This matches v1.7.1 idiom even though
+/// SCI's underlying revm 34 still surfaces OOG as `Err`.
 #[inline]
 pub(crate) fn charge_input_cost(
     storage: &mut StorageCtx,
     calldata: &[u8],
 ) -> Option<PrecompileResult> {
     if storage.deduct_gas(input_cost(calldata.len())).is_err() {
-        return Some(Err(storage.halt_output(PrecompileHalt::OutOfGas)));
+        return Some(Ok(storage.halt_output(PrecompileHalt::OutOfGas)));
     }
     None
 }
@@ -265,7 +300,7 @@ pub(crate) fn dispatch_call<T>(
         if storage.spec().is_t1() {
             return Ok(storage.revert_output(Bytes::new()));
         } else {
-            return Err(storage.halt_output(PrecompileHalt::Other(
+            return Ok(storage.halt_output(PrecompileHalt::Other(
                 "Invalid input: missing function selector".into(),
             )));
         }
@@ -295,7 +330,7 @@ where
 {
     match result {
         Ok(out) => {
-            assert!(out.reverted, "expected reverted output, got: {out:?}");
+            assert!(out.is_revert(), "expected reverted output, got: {out:?}");
             let decoded = E::abi_decode(&out.bytes).unwrap();
             assert_eq!(decoded, expected_error);
         }

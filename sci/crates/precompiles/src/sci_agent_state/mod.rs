@@ -93,7 +93,7 @@ mod tests {
 
             let calldata = tripKeyCall { sessionKey: session_key }.abi_encode();
             let result = state.call(&calldata, bad_caller)?;
-            assert!(result.reverted, "expected revert for unauthorized caller");
+            assert!(result.is_revert(), "expected revert for unauthorized caller");
 
             let decoded =
                 SciAgentStateError::abi_decode(&result.bytes).expect("expected SciAgentStateError");
@@ -113,7 +113,7 @@ mod tests {
 
             let calldata = tripKeyCall { sessionKey: session_key }.abi_encode();
             let result = state.call(&calldata, AGENT_CIRCUIT_BREAKER_ADDRESS)?;
-            assert!(!result.reverted, "expected success");
+            assert!(!result.is_revert(), "expected success");
 
             assert!(state.tripped[session_key].read()?);
 
@@ -145,7 +145,7 @@ mod tests {
             // Untrip from wrong caller — should fail and leave state intact
             let untrip_data = untripKeyCall { sessionKey: session_key }.abi_encode();
             let result = state.call(&untrip_data, bad_caller)?;
-            assert!(result.reverted);
+            assert!(result.is_revert());
             assert!(state.tripped[session_key].read()?);
             Ok(())
         })
@@ -170,7 +170,7 @@ mod tests {
                 &untripKeyCall { sessionKey: session_key }.abi_encode(),
                 AGENT_CIRCUIT_BREAKER_ADDRESS,
             )?;
-            assert!(!result.reverted);
+            assert!(!result.is_revert());
             assert!(!state.tripped[session_key].read()?);
             Ok(())
         })
@@ -189,7 +189,7 @@ mod tests {
             // Before trip
             let calldata = isTrippedCall { sessionKey: session_key }.abi_encode();
             let result = state.call(&calldata, random_caller)?;
-            assert!(!result.reverted);
+            assert!(!result.is_revert());
             let decoded = isTrippedCall::abi_decode_returns(&result.bytes)?;
             assert!(!decoded);
 
@@ -199,7 +199,7 @@ mod tests {
                 AGENT_CIRCUIT_BREAKER_ADDRESS,
             )?;
             let result = state.call(&calldata, random_caller)?;
-            assert!(!result.reverted);
+            assert!(!result.is_revert());
             let decoded = isTrippedCall::abi_decode_returns(&result.bytes)?;
             assert!(decoded);
             Ok(())
@@ -219,7 +219,7 @@ mod tests {
                 &untripKeyCall { sessionKey: session_key }.abi_encode(),
                 AGENT_CIRCUIT_BREAKER_ADDRESS,
             )?;
-            assert!(!result.reverted);
+            assert!(!result.is_revert());
             assert!(!state.tripped[session_key].read()?);
             Ok(())
         })

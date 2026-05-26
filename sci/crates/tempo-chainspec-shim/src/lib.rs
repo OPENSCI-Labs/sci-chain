@@ -8,11 +8,16 @@
 //! shape so verbatim Tempo source compiles, and re-exports the type as `SciHardfork`
 //! for SCI-facing consumers.
 
+/// Hardfork enum and helpers, packaged under `tempo_chainspec::hardfork`
+/// so verbatim Tempo source `use tempo_chainspec::hardfork::TempoHardfork;`
+/// resolves without modification.
 pub mod hardfork {
     use revm::primitives::hardfork::SpecId;
 
     /// Tempo-style hardfork ladder. SCI Chain launches at [`Self::T3`] (full feature
-    /// set); `Genesis..T2` exist solely to keep ported test fixtures compiling.
+    /// set as of v1.6); v1.7.1 adds T5 (TIP-1053 witness key authorisations) and
+    /// T4/T6 reserved for upstream parity. `Genesis..T2` exist solely to keep ported
+    /// test fixtures compiling.
     ///
     /// Re-exported as `SciHardfork` for the SCI-facing public API; both names refer
     /// to the same type.
@@ -33,8 +38,18 @@ pub mod hardfork {
         T1C,
         /// Tempo T2 equivalent. Enforces tx.origin checks for contract callers.
         T2,
-        /// Tempo T3 equivalent. Full feature set (call scoping, periodic limits, etc.).
+        /// Tempo T3 equivalent. Full v1.6 feature set (call scoping, periodic limits, etc.).
         T3,
+        /// Tempo T4 equivalent. Activates SSTORE refund propagation; required by the
+        /// v1.7.1 macros' zero-init optimisation in `gen_store_impl`. Reserved on SCI —
+        /// EIP-8037 / TIP-1016 state-gas accounting is intentionally not adopted.
+        T4,
+        /// Tempo T5 equivalent. Adds TIP-1053 key-authorisation witness support
+        /// (`authorizeKey(...,witness)`, `burnKeyAuthorizationWitness`,
+        /// `isKeyAuthorizationWitnessBurned`).
+        T5,
+        /// Tempo T6 equivalent. Reserved for upstream parity.
+        T6,
     }
 
     impl TempoHardfork {
@@ -66,6 +81,24 @@ pub mod hardfork {
         #[inline]
         pub const fn is_t3(&self) -> bool {
             (*self as u8) >= (Self::T3 as u8)
+        }
+
+        /// Returns `true` at or after the T4 feature level.
+        #[inline]
+        pub const fn is_t4(&self) -> bool {
+            (*self as u8) >= (Self::T4 as u8)
+        }
+
+        /// Returns `true` at or after the T5 feature level (TIP-1053 witness API).
+        #[inline]
+        pub const fn is_t5(&self) -> bool {
+            (*self as u8) >= (Self::T5 as u8)
+        }
+
+        /// Returns `true` at or after the T6 feature level.
+        #[inline]
+        pub const fn is_t6(&self) -> bool {
+            (*self as u8) >= (Self::T6 as u8)
         }
     }
 

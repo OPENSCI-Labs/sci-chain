@@ -288,11 +288,15 @@ where
     let (block, tx, cfg, journal, _chain, _local) = ctx.all_mut();
     let gas_params = cfg.gas_params().clone();
     let internals = EvmInternals::new(journal, block, cfg, tx);
+    // 7-arg signature since Tempo v1.7.1 added `amsterdam_eip8037_enabled` for
+    // EIP-8037 state-gas tracking; SCI hardcodes `false` (see
+    // `sci-revm-shim` crate docs).
     let mut provider = EvmPrecompileStorageProvider::new(
         internals,
         u64::MAX,
         0,
         TempoHardfork::T3,
+        false,
         false,
         gas_params,
     );

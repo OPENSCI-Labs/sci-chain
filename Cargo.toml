@@ -63,6 +63,7 @@ members = [
   "sci/crates/precompiles",
   "sci/crates/precompiles-macros",
   "sci/crates/precompile-abi",
+  "sci/crates/revm-shim",
   "sci/crates/tempo-chainspec-shim",
 ]
 default-members = [
@@ -273,6 +274,7 @@ base-action-harness = { path = "actions/harness" }
 # the renames below route those to our `sci-*` crates. This is the central mechanism
 # that makes long-term Tempo upstream sync tractable — see CLAUDE.md → "Upstream sync".
 sci-precompiles = { path = "sci/crates/precompiles", default-features = false }
+sci-revm-shim = { path = "sci/crates/revm-shim" }
 tempo-chainspec = { package = "tempo-chainspec-shim", path = "sci/crates/tempo-chainspec-shim" }
 tempo-contracts = { package = "sci-precompile-abi", path = "sci/crates/precompile-abi", default-features = false }
 tempo-precompiles-macros = { package = "sci-precompiles-macros", path = "sci/crates/precompiles-macros" }

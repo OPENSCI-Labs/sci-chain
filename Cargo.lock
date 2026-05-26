@@ -19840,9 +19840,9 @@ dependencies = [
  "derive_more 2.1.1",
  "eyre",
  "proptest",
- "revm",
  "sci-precompile-abi",
  "sci-precompiles-macros",
+ "sci-revm-shim",
  "scoped-tls",
  "tempo-chainspec-shim",
  "thiserror 2.0.18",
@@ -19857,6 +19857,14 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.117",
+]
+
+[[package]]
+name = "sci-revm-shim"
+version = "0.9.0"
+dependencies = [
+ "alloy-primitives",
+ "revm",
 ]
 
 [[package]]

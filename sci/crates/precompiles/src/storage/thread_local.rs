@@ -5,10 +5,9 @@ use revm::{
     context::{
         Block, CfgEnv, ContextTr, JournalTr, Transaction, journaled_state::JournalCheckpoint,
     },
-    precompile::{PrecompileError, PrecompileOutput, PrecompileResult},
+    precompile::{PrecompileHalt, PrecompileOutput, PrecompileResult},
     state::{AccountInfo, Bytecode},
 };
-use crate::error::PrecompileHalt;
 use scoped_tls::scoped_thread_local;
 use std::{cell::RefCell, fmt::Debug};
 use tempo_chainspec::hardfork::TempoHardfork;
@@ -171,9 +170,19 @@ impl StorageCtx {
         Self::with_storage(|s| s.refund_gas(gas))
     }
 
+    /// Returns the gas limit for this precompile call.
+    pub fn gas_limit(&self) -> u64 {
+        Self::with_storage(|s| s.gas_limit())
+    }
+
     /// Returns the gas used so far.
     pub fn gas_used(&self) -> u64 {
         Self::with_storage(|s| s.gas_used())
+    }
+
+    /// Returns the state-creating gas used so far (cold SSTORE zero->non-zero, code deposit).
+    pub fn state_gas_used(&self) -> u64 {
+        Self::with_storage(|s| s.state_gas_used())
     }
 
     /// Returns the gas refunded so far.
@@ -189,6 +198,12 @@ impl StorageCtx {
     /// Returns the currently active hardfork.
     pub fn spec(&self) -> TempoHardfork {
         Self::with_storage(|s| s.spec())
+    }
+
+    /// Mirrors `CfgEnv::enable_amsterdam_eip8037`. Used by precompiles to gate the TIP-1016
+    /// regular/state gas split independently of the active hardfork.
+    pub fn amsterdam_eip8037_enabled(&self) -> bool {
+        Self::with_storage(|s| s.amsterdam_eip8037_enabled())
     }
 
     /// Returns whether the current call context is static.
@@ -240,9 +255,9 @@ impl StorageCtx {
         Self::try_with_storage(|storage| storage.recover_signer(digest, v, r, s))
     }
 
-    /// Returns a successful [`PrecompileOutput`] with the current gas values.
+    /// Returns a [`PrecompileOutput`] with [`revm::precompile::PrecompileStatus::Success`] and the current gas values.
     pub fn success_output(&self, output: Bytes) -> PrecompileOutput {
-        PrecompileOutput::new(self.gas_used(), output)
+        PrecompileOutput::new(self.gas_used(), output, self.reservoir())
     }
 
     /// Returns an ABI-encoded success output.
@@ -250,9 +265,9 @@ impl StorageCtx {
         self.success_output(output.abi_encode().into())
     }
 
-    /// Returns a reverted [`PrecompileOutput`] with the current gas values.
+    /// Returns a [`PrecompileOutput`] with [`revm::precompile::PrecompileStatus::Revert`] and the current gas values.
     pub fn revert_output(&self, output: Bytes) -> PrecompileOutput {
-        PrecompileOutput::new_reverted(self.gas_used(), output)
+        PrecompileOutput::revert(self.gas_used(), output, self.reservoir())
     }
 
     /// Reverts with an ABI-encoded error.
@@ -260,12 +275,9 @@ impl StorageCtx {
         self.revert_output(error.abi_encode().into())
     }
 
-    /// Returns a [`PrecompileError`] representing the given halt reason.
-    ///
-    /// In revm 34 halts are signaled by returning `Err(PrecompileError)` from the precompile
-    /// closure, so the caller must wrap this value in `Err(..)`.
-    pub fn halt_output(&self, halt: PrecompileHalt) -> PrecompileError {
-        halt.into()
+    /// Returns a [`PrecompileOutput`] with [`revm::precompile::PrecompileStatus::Halt`] and the current gas values.
+    pub fn halt_output(&self, halt: PrecompileHalt) -> PrecompileOutput {
+        PrecompileOutput::halt(halt, self.reservoir())
     }
 
     /// Returns a [`PrecompileResult`] constructed from the given [`TempoPrecompileError`].
@@ -454,6 +466,16 @@ impl StorageCtx {
     /// NOTE: assumes storage tests always use the `HashMapStorageProvider`
     pub fn counter_sload(&self) -> u64 {
         self.as_hashmap().counter_sload()
+    }
+
+    /// NOTE: assumes storage tests always use the `HashMapStorageProvider`
+    pub fn counter_sstore(&self) -> u64 {
+        self.as_hashmap().counter_sstore()
+    }
+
+    /// NOTE: assumes storage tests always use the `HashMapStorageProvider`
+    pub fn reset_counters(&mut self) {
+        self.as_hashmap().reset_counters()
     }
 
     /// Checks if a contract at the given address has bytecode deployed.

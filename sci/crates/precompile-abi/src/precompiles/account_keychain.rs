@@ -3,8 +3,8 @@
 pub use IAccountKeychain::{
     IAccountKeychainErrors as AccountKeychainError, IAccountKeychainEvents as AccountKeychainEvent,
     authorizeKey_0Call as legacyAuthorizeKeyCall, authorizeKey_1Call as authorizeKeyCall,
-    getAllowedCallsReturn, getRemainingLimitWithPeriodCall,
-    getRemainingLimitWithPeriodReturn as getRemainingLimitReturn,
+    authorizeKey_2Call as authorizeKeyWithWitnessCall, getAllowedCallsReturn,
+    getRemainingLimitWithPeriodCall, getRemainingLimitWithPeriodReturn as getRemainingLimitReturn,
 };
 
 crate::sol! {
@@ -21,11 +21,8 @@ crate::sol! {
     #[sol(abi)]
     interface IAccountKeychain {
         enum SignatureType {
-            /// secp256k1 ECDSA (Ethereum-standard).
             Secp256k1,
-            /// P-256 ECDSA (passkey / mobile secure-enclave keys).
             P256,
-            /// WebAuthn assertion (browser passkey).
             WebAuthn,
         }
 
@@ -95,6 +92,12 @@ crate::sol! {
             uint256 remainingLimit
         );
 
+        /// Emitted when a key authorization carries a TIP-1053 witness.
+        event KeyAuthorizationWitness(address indexed account, bytes32 indexed witness);
+
+        /// Emitted when a TIP-1053 key-authorization witness is manually burned.
+        event KeyAuthorizationWitnessBurned(address indexed account, bytes32 indexed witness);
+
         /// Legacy authorize-key entrypoint used before T3.
         function authorizeKey(
             address keyId,
@@ -113,6 +116,19 @@ crate::sol! {
             SignatureType signatureType,
             KeyRestrictions calldata config
         ) external;
+
+        /// Authorize a new key with a TIP-1053 witness.
+        /// @dev The witness must not be burned for the caller's account. bytes32(0) is valid.
+        function authorizeKey(
+            address keyId,
+            SignatureType signatureType,
+            KeyRestrictions calldata config,
+            bytes32 witness
+        ) external;
+
+        /// Burn a TIP-1053 key-authorization witness without authorizing a key.
+        /// @dev Callable by the account root key or an active access key.
+        function burnKeyAuthorizationWitness(bytes32 witness) external;
 
         /// Revoke an authorized key
         /// @param publicKey The public key to revoke
@@ -179,6 +195,9 @@ crate::sol! {
             address keyId
         ) external view returns (bool isScoped, CallScope[] memory scopes);
 
+        /// Returns whether a TIP-1053 key-authorization witness has been manually burned.
+        function isKeyAuthorizationWitnessBurned(address account, bytes32 witness) external view returns (bool);
+
         /// Get the key used in the current transaction
         /// @return The keyId used in the current transaction
         function getTransactionKey() external view returns (address);
@@ -197,10 +216,20 @@ crate::sol! {
         error SignatureTypeMismatch(uint8 expected, uint8 actual);
         error CallNotAllowed();
         error InvalidCallScope();
+        error InvalidKeyAuthorizationWitness();
+        error KeyAuthorizationWitnessAlreadyBurned();
         error LegacyAuthorizeKeySelectorChanged(bytes4 newSelector);
     }
 }
 
+// SCI-only patch — alloy-sol-macro 1.6.0 auto-generates constructor helpers on
+// `{Interface}Errors` enums; Tempo v1.7.1 dropped the manual impl block (in PR
+// #4027) because it collided with the auto-generated ones. SCI is pinned to
+// alloy-sol-macro 1.5.6 by Base v0.9, which does *not* auto-generate, so the
+// keychain `mod.rs` calls (e.g. `AccountKeychainError::unauthorized_caller()`)
+// won't resolve without these manual constructors. Re-add them here, including
+// the two new T5 witness variants. When Base eventually bumps alloy-sol-macro
+// past 1.6.0, this block can be deleted in lockstep.
 impl AccountKeychainError {
     /// Creates an error for signature type mismatch.
     pub const fn signature_type_mismatch(expected: u8, actual: u8) -> Self {
@@ -252,9 +281,7 @@ impl AccountKeychainError {
         Self::ExpiryInPast(IAccountKeychain::ExpiryInPast {})
     }
 
-    /// Creates an error for when a key_id has already been revoked.
-    /// Once revoked, a key_id can never be re-authorized for the same account.
-    /// This prevents replay attacks where a revoked key's authorization is reused.
+    /// Creates an error for when a `key_id` has already been revoked.
     pub const fn key_already_revoked() -> Self {
         Self::KeyAlreadyRevoked(IAccountKeychain::KeyAlreadyRevoked {})
     }
@@ -269,6 +296,18 @@ impl AccountKeychainError {
         Self::InvalidCallScope(IAccountKeychain::InvalidCallScope {})
     }
 
+    /// Creates an error for a TIP-1053 witness path that is unavailable for the current hardfork.
+    pub const fn invalid_key_authorization_witness() -> Self {
+        Self::InvalidKeyAuthorizationWitness(IAccountKeychain::InvalidKeyAuthorizationWitness {})
+    }
+
+    /// Creates an error for a TIP-1053 witness that has already been burned.
+    pub const fn key_authorization_witness_already_burned() -> Self {
+        Self::KeyAuthorizationWitnessAlreadyBurned(
+            IAccountKeychain::KeyAuthorizationWitnessAlreadyBurned {},
+        )
+    }
+
     /// Creates an error for the legacy authorize-key selector being unavailable on T3+.
     pub fn legacy_authorize_key_selector_changed(new_selector: [u8; 4]) -> Self {
         Self::LegacyAuthorizeKeySelectorChanged(
@@ -276,5 +315,68 @@ impl AccountKeychainError {
                 newSelector: new_selector.into(),
             },
         )
+    }
+}
+
+// Companion snake_case event constructors. Same rationale as the error block
+// above — alloy-sol-macro 1.6.0 auto-generates these; we're on 1.5.6 so we
+// re-add them by hand. The two TIP-1053 witness events (`KeyAuthorizationWitness`,
+// `KeyAuthorizationWitnessBurned`) are constructed via direct CamelCase
+// `Self::Variant(...)` calls in upstream keychain mod.rs (not through
+// snake_case helpers), so they're omitted here.
+impl AccountKeychainEvent {
+    /// Constructs the `KeyAuthorized` event.
+    pub fn key_authorized(
+        account: alloy_primitives::Address,
+        public_key: alloy_primitives::Address,
+        signature_type: u8,
+        expiry: u64,
+    ) -> Self {
+        Self::KeyAuthorized(IAccountKeychain::KeyAuthorized {
+            account,
+            publicKey: public_key,
+            signatureType: signature_type,
+            expiry,
+        })
+    }
+
+    /// Constructs the `KeyRevoked` event.
+    pub fn key_revoked(
+        account: alloy_primitives::Address,
+        public_key: alloy_primitives::Address,
+    ) -> Self {
+        Self::KeyRevoked(IAccountKeychain::KeyRevoked { account, publicKey: public_key })
+    }
+
+    /// Constructs the `SpendingLimitUpdated` event.
+    pub fn spending_limit_updated(
+        account: alloy_primitives::Address,
+        public_key: alloy_primitives::Address,
+        token: alloy_primitives::Address,
+        new_limit: alloy_primitives::U256,
+    ) -> Self {
+        Self::SpendingLimitUpdated(IAccountKeychain::SpendingLimitUpdated {
+            account,
+            publicKey: public_key,
+            token,
+            newLimit: new_limit,
+        })
+    }
+
+    /// Constructs the `AccessKeySpend` event.
+    pub fn access_key_spend(
+        account: alloy_primitives::Address,
+        public_key: alloy_primitives::Address,
+        token: alloy_primitives::Address,
+        amount: alloy_primitives::U256,
+        remaining_limit: alloy_primitives::U256,
+    ) -> Self {
+        Self::AccessKeySpend(IAccountKeychain::AccessKeySpend {
+            account,
+            publicKey: public_key,
+            token,
+            amount,
+            remainingLimit: remaining_limit,
+        })
     }
 }

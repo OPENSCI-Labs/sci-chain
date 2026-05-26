@@ -33,6 +33,9 @@ sci-chain/
 │   │   ├── precompiles/       ←     Core: AccountKeychain, storage abstraction
 │   │   ├── precompiles-macros/←     Proc macros (#[contract], #[Storable])
 │   │   ├── precompile-abi/    ←     Precompile ABI bindings (alloy sol!)
+│   │   ├── revm-shim/         ←     Compat shim exposing revm 38 PrecompileOutput /
+│   │   │                             PrecompileHalt / state-gas API surface on top
+│   │   │                             of Base v0.9's revm 34 (sci-precompiles-only)
 │   │   └── tempo-chainspec-shim/ ← Compat shim exposing `tempo_chainspec::hardfork`
 │   │                                so verbatim Tempo source compiles unmodified
 │   ├── contracts/             ←   Solidity (Foundry project)
@@ -53,7 +56,7 @@ sci-chain/
    new modification needs to be added here and justified):
    - `Cargo.toml` — workspace members include `sci/crates/*` and corresponding
      `workspace.dependencies` entries (`sci-precompiles`, `sci-precompiles-macros`,
-     `sci-precompile-abi`).
+     `sci-precompile-abi`, `sci-revm-shim`).
    - `crates/common/evm/Cargo.toml` — adds `sci-precompiles.workspace = true` so the
      factory can install the AccountKeychain precompile.
    - `crates/common/evm/src/factory.rs` — calls `sci_precompiles::install(&mut precompiles, &cfg_env)`
@@ -88,28 +91,44 @@ sci-chain/
 3. **Tempo code is reference only**. Source is at `/home/gavin/opensci/sci-dev/tempo/`
    (an earlier draft of this guide listed `~/sci-dev/Tempo-ref/` — that path does not exist
    on this machine). Copy and adapt, never import as a git dependency.
-4. **Namespace convention — verbatim Tempo source, SCI-facing API via aliases.**
+4. **Namespace convention — verbatim Tempo source, SCI-facing API via aliases + shim crates.**
    To keep upstream Tempo merges tractable, **ported Tempo source files use Tempo names
    internally** (`tempo_chainspec::hardfork::TempoHardfork`, `tempo_contracts::*`,
    `tempo_precompiles_macros::*`, `TempoPrecompileError`). Those names route to our
    `sci-*` crates via Cargo `package = ...` renames in the workspace `Cargo.toml`,
    and our `sci-precompiles` crate re-exports them as `SciHardfork`,
    `SciPrecompileError` (etc.) for SCI-facing consumers. Both names refer to the same
-   type. Only this conceptual map applies:
+   type. Map:
    - `tempo_precompiles` (concept) → crate `sci-precompiles` (no source rename; Tempo
      doesn't ship a `tempo_precompiles` crate-level import that we re-host)
    - `tempo_precompiles_macros` → cargo-renamed to `sci-precompiles-macros`
    - `tempo_contracts` → cargo-renamed to `sci-precompile-abi`
-   - `tempo_chainspec` → cargo-renamed to `tempo-chainspec-shim` (a 30-line compat
-     crate that exposes only `hardfork::TempoHardfork` + `SciHardfork` alias)
+   - `tempo_chainspec` → cargo-renamed to `tempo-chainspec-shim` (a ~100-line compat
+     crate that exposes only `hardfork::TempoHardfork` + `SciHardfork` alias, with
+     enum variants up through T6)
+   - **`revm` (inside `sci-precompiles` only) → cargo-renamed to `sci-revm-shim`** (a
+     ~250-line compat crate that re-exports real revm 34 verbatim and ADDS the
+     v38-shape `PrecompileOutput` newtype with `state_gas_used` / `reservoir` /
+     `status` fields + `PrecompileHalt` enum + `GasParamsExt` trait + `GasTracker`
+     stub + `to_revm34` boundary fn. Verbatim Tempo v1.7.1+ source that imports
+     `revm::precompile::PrecompileHalt` or constructs
+     `PrecompileOutput::halt(reason, reservoir)` compiles unmodified through the
+     shim, and SCI's `install()` macro folds shim outputs back into revm 34's
+     `PrecompileResult` via `revm::precompile::to_revm34(...)`. The alias is
+     **scoped strictly to sci-precompiles** — every other workspace member
+     (including `base-common-evm` and our `SciHandler` host integration) continues
+     to depend on real revm 34 directly. See "Shim crate maintenance" below for
+     the upgrade workflow.)
    - `TIP-20` → standard ERC-20 (no rename — SCI just doesn't ship a TIP-20 factory;
      the keychain treats every contract called via transfer/approve as token-like;
-     see Critical Rule #6 below)
+     see Critical Rule #5 below)
 5. **SCI-specific divergences** baked into the port (these are the *real* deltas vs.
    Tempo; everything else syncs verbatim):
    - `is_tip20(target)` is stubbed to always return `true` (see `validate_selector_rules`
      in `account_keychain/mod.rs`) — SCI applies recipient restrictions to any
-     transfer/approve target without checking for a TIP-20 prefix.
+     transfer/approve target without checking for a TIP-20 prefix. The upstream check
+     also calls into `tempo_primitives::TempoAddressExt` and `tip20_factory::TIP20Factory`,
+     neither of which SCI ships, so those imports are dropped at sync time.
    - `test_util::TIP20Setup` is a no-op stub (lives in `sci-precompiles/src/test_util.rs`)
      so ported tests using it compile but the setup runs no real TIP-20 deploy logic.
    - `test_t3_rejects_recipient_constrained_scope_for_undeployed_tip20` is `#[ignore]`'d
@@ -117,19 +136,40 @@ sci-chain/
    - The keychain's call_scope path checks `is_constrained_tip20_selector` using
      standard ERC-20 `transfer`/`approve` selectors (identical hashes as Tempo's
      ITIP20), so the gating effectively becomes "selector matches ERC-20 transfer-like".
-6. **Version divergence vs. Tempo** (also accommodated by `sci-precompiles`):
-   - Tempo v1.6 uses `revm 37` + `alloy-evm 0.32` + `alloy` umbrella crate 2.0
+   - `AccountKeychainError::*` and `AccountKeychainEvent::*` snake_case constructor
+     helpers (`unauthorized_caller()`, `key_already_exists()`, `key_authorized()`,
+     etc.) are manually re-added in `sci/crates/precompile-abi/src/precompiles/account_keychain.rs`.
+     Upstream Tempo dropped these manual impls in v1.7.1 because alloy-sol-macro 1.6.0
+     auto-generates them; Base v0.9 is pinned to alloy-sol-macro 1.5.6 which does NOT
+     auto-generate, so SCI keeps the manual block. Re-apply on every Tempo sync; can
+     be deleted once Base bumps alloy-sol-macro past 1.6.0.
+   - `storage/evm.rs` reads `cfg.enable_amsterdam_eip8037` in three sites — patched
+     to literal `false` because SCI's revm 34 `CfgEnv` has no such field; SCI does
+     not adopt EIP-8037 / TIP-1016 state-gas accounting.
+   - `storage/evm.rs` imports `revm::GasParamsExt` (shim trait) as a one-line SCI
+     patch so the verbatim Tempo source's `gas_params.code_deposit_state_gas(...)` /
+     `create_state_gas()` / `sstore_state_gas(...)` calls resolve to the shim's no-op
+     stubs.
+   - `storage/evm.rs` `#[cfg(test)] mod tests` is changed to
+     `#[cfg(all(test, feature = "evm-bridge-tests"))]` because the upstream test
+     fixtures pull in `tempo_evm::TempoEvmFactory` / `tempo_revm::*` which SCI does
+     not ship. Keychain coverage runs via `HashMapStorageProvider` instead.
+   - `storage/hashmap.rs` `JournalCheckpoint` literal drops the `selfdestructed_i: 0`
+     field — revm 34's `JournalCheckpoint` has no such field.
+   - `account_keychain/mod.rs::unrestricted_restrictions()` (test helper) is patched
+     to build `KeyRestrictions` inline instead of routing through
+     `tempo_alloy::provider::keychain::KeyRestrictions::default()`.
+6. **Version divergence vs. Tempo** (absorbed by the shim crate):
+   - Tempo v1.7.1 uses `revm 38` + `alloy-evm 0.34` + `alloy` umbrella crate 2.0.5
    - Base v0.9 uses `revm 34` + `alloy-evm 0.27.3` + individual `alloy-*` crates 1.8/1.5
-     (same revm / alloy major versions as Base v0.8 — the v0.8 → v0.9 uplift was
-     a whole-crate `Op*` → `Base*` rename plus a builder-API restructuring, not a
-     dep-stack bump)
-   - Visible API deltas: `PrecompileOutput` has no `reservoir` field and no
-     `::halt(...)`/`::revert(...)` constructors in revm 34 — halt is signaled by
-     returning `Err(PrecompileError::OutOfGas)` from the closure; revert uses
-     `PrecompileOutput::new_reverted(gas, bytes)`; `is_revert()` is now the `reverted`
-     field. `JournalCheckpoint` lost the `selfdestructed_i` field.
-   - All `::alloy::primitives::*` / `::alloy::sol_types::*` / `::alloy::consensus::*`
-     paths in ported code use the individual crates (`alloy_primitives::`, etc.).
+   - The gap (revm 34 → 38 introduced EIP-8037 / TIP-1016 "state gas + reservoir"
+     model, new `PrecompileOutput` fields, `::halt(...)` constructor, etc.) is bridged
+     by **`sci/crates/revm-shim`** — see Critical Rule #4 and "Shim crate maintenance"
+     below. With the shim in place, SCI does NOT have to track revm bumps until Base
+     itself bumps revm.
+   - `alloy` umbrella → individual `alloy-*` crates: sed at sync time.
+     `::alloy::primitives::aliases::U96` etc. were added in v1.7.1 — the sed sweep
+     handles this with the `aliases::` rule documented below.
 7. **Docs committed to the repository must be written in English.** This applies to
    every `.md` under version control (CLAUDE.md, READMEs, `sci/docs/**` except
    `analysis/`, design notes, PR descriptions, commit messages). Inline code
@@ -141,62 +181,164 @@ sci-chain/
 
 ## Upstream Tempo Sync
 
-SCI Chain forks Tempo at v1.6.0 and wants to track upstream keychain improvements
-without per-merge identifier rewrites. The Cargo `package = ...` rename strategy
-above means business source files (`account_keychain/{mod,dispatch}.rs`, `storage/*.rs`,
-`error.rs`, the macros) can be **copied verbatim** from a newer Tempo release.
+SCI Chain forks Tempo at v1.7.1 and tracks upstream keychain improvements without
+per-merge identifier rewrites. The combination of Cargo `package = ...` renames
+(Rule #4) and the `sci-revm-shim` compat crate means business source files
+(`account_keychain/{mod,dispatch}.rs`, `storage/*.rs`, `error.rs`, the macros, the
+ABI bindings) can be **copied verbatim** from a newer Tempo release. The shim
+absorbs the revm-version gap; only a small bundle of well-known SCI patches needs
+re-applying.
 
-### Workflow when Tempo releases v1.7.0 (or any upgrade)
+### Workflow when Tempo releases v1.7.2 (or any upgrade)
 
 ```bash
 TEMPO=/home/gavin/opensci/sci-dev/tempo
 
-# 1. Sync the hardfork enum (new variants flow in here)
-cp $TEMPO/crates/chainspec/src/hardfork.rs /tmp/hardfork-upstream.rs   # for reference
+# 1. Preserve SCI-only sibling files that live next to verbatim ones.
+cp sci/crates/precompiles/src/account_keychain/sci_ext.rs /tmp/sci_ext.rs.preserve
 
-# 2. Sync business files (zero substitution thanks to Cargo renames)
+# 2. Sync business files (zero substitution thanks to Cargo renames + shim)
 cp $TEMPO/crates/precompiles/src/account_keychain/mod.rs      sci/crates/precompiles/src/account_keychain/
 cp $TEMPO/crates/precompiles/src/account_keychain/dispatch.rs sci/crates/precompiles/src/account_keychain/
-cp -r $TEMPO/crates/precompiles/src/storage                   sci/crates/precompiles/src/
-cp $TEMPO/crates/precompiles/src/error.rs                     sci/crates/precompiles/src/  # then reconcile error variants
+cp $TEMPO/crates/precompiles/src/storage/evm.rs               sci/crates/precompiles/src/storage/
+cp $TEMPO/crates/precompiles/src/storage/hashmap.rs           sci/crates/precompiles/src/storage/
+cp $TEMPO/crates/precompiles/src/storage/mod.rs               sci/crates/precompiles/src/storage/
+cp $TEMPO/crates/precompiles/src/storage/packing.rs           sci/crates/precompiles/src/storage/
+cp $TEMPO/crates/precompiles/src/storage/thread_local.rs      sci/crates/precompiles/src/storage/
+cp $TEMPO/crates/precompiles/src/storage/types/*.rs           sci/crates/precompiles/src/storage/types/
 cp $TEMPO/crates/precompiles-macros/src/*.rs                  sci/crates/precompiles-macros/src/
 cp $TEMPO/crates/contracts/src/precompiles/account_keychain.rs sci/crates/precompile-abi/src/precompiles/
 cp $TEMPO/crates/contracts/src/precompiles/common_errors.rs    sci/crates/precompile-abi/src/precompiles/
 
-# 3. Apply platform diffs (alloy umbrella → individual crates; revm 37 → revm 34 API)
-find sci/crates -name "*.rs" -exec sed -i \
+# 3. Restore the SCI-only sibling file
+cp /tmp/sci_ext.rs.preserve sci/crates/precompiles/src/account_keychain/sci_ext.rs
+
+# 4. Apply the alloy umbrella → individual-crate sed sweep
+find sci/crates/precompiles sci/crates/precompiles-macros sci/crates/precompile-abi \
+  -name "*.rs" -exec sed -i \
+  -e 's|::alloy::primitives::aliases::|::alloy_primitives::aliases::|g' \
   -e 's|::alloy::primitives::|::alloy_primitives::|g' \
   -e 's|::alloy::sol_types::|::alloy_sol_types::|g' \
   -e 's|::alloy::consensus::|::alloy_consensus::|g' \
   -e 's|use alloy::primitives|use alloy_primitives|g' \
   -e 's|use alloy::sol_types|use alloy_sol_types|g' \
   -e 's|use alloy::consensus|use alloy_consensus|g' \
-  -e 's|PrecompileOutput::revert(\([^,]*\), \([^,]*\), [^)]*)|PrecompileOutput::new_reverted(\1, \2)|g' \
-  -e 's|PrecompileOutput::new(\([^,]*\), \([^,]*\), [^)]*)|PrecompileOutput::new(\1, \2)|g' \
-  -e 's|\.is_revert()|.reverted|g' \
+  -e 's|alloy::primitives|alloy_primitives|g' \
+  -e 's|alloy::sol_types|alloy_sol_types|g' \
+  -e 's|alloy::consensus|alloy_consensus|g' \
   {} +
 
-# 4. Re-apply SCI patches (is_tip20 stub, ignored test, etc.)
-#    Currently these are baked in; a future scripts/apply-sci-patches.sh would automate.
+# Note: There are no `PrecompileOutput::*` constructor rewrites in this sed sweep.
+# The shim crate (`sci-revm-shim`) provides `PrecompileOutput::new(g,b,r)`,
+# `revert(g,b,r)`, `halt(h,r)` natively, so verbatim Tempo source compiles as-is.
+# Same for `.is_revert()` (shim method) vs `.reverted` (revm 34 field) — the shim's
+# newtype provides `.is_revert()`.
 
-# 5. Verify
-cargo test -p sci-precompiles
+# 5. Re-apply the SCI patches enumerated in Critical Rule #5 (one-shot text edits;
+# stable across syncs unless upstream restructures the surrounding code):
+#   - `account_keychain/mod.rs` line 9: add `mod sci_ext;` after `pub mod dispatch;`
+#   - `account_keychain/mod.rs` line 33: drop `use tempo_primitives::TempoAddressExt;`
+#   - `account_keychain/mod.rs` line 39: drop `tip20_factory::TIP20Factory` from
+#     the `use crate::{...}` block
+#   - `account_keychain/mod.rs::validate_selector_rules`: replace the
+#     `cached_is_tip20`/`TIP20Factory::new().is_tip20()`/`target.is_tip20()` closure
+#     body with `Ok(true)` and rename `target` → `_target` in the fn signature
+#   - `account_keychain/mod.rs::test_t3_rejects_recipient_constrained_scope_for_undeployed_tip20`:
+#     prepend `#[ignore = "..."]` to the `#[test]` line
+#   - `account_keychain/mod.rs::unrestricted_restrictions`: replace the
+#     `tempo_alloy::provider::keychain::KeyRestrictions::default().into()` body
+#     with an inline `KeyRestrictions { expiry: u64::MAX, .. }` literal
+#   - `account_keychain/dispatch.rs`: convert the two multi-line
+#     `use alloy::{ primitives::*, sol_types::* };` blocks into separate
+#     `use alloy_primitives::*` / `use alloy_sol_types::*` imports
+#   - `storage/evm.rs`: add `GasParamsExt` to the `revm::{...}` import block
+#   - `storage/evm.rs`: replace `cfg.enable_amsterdam_eip8037` with `false` in
+#     `new_max_gas` and `new_with_gas_limit`
+#   - `storage/evm.rs`: change `#[cfg(test)] mod tests` to
+#     `#[cfg(all(test, feature = "evm-bridge-tests"))]`
+#   - `storage/evm.rs`: convert the multi-line `use alloy::{...}` block at top
+#   - `storage/hashmap.rs`: remove the `selfdestructed_i: 0,` line from the
+#     `JournalCheckpoint` literal
+#   - `storage/thread_local.rs`: convert the multi-line `use alloy::{...}` block at top
+#   - `test_util.rs`: keep our stubbed 130-line version (`git checkout HEAD --`
+#     before running tests — DO NOT cp upstream's 470-line version)
+#   - `precompile-abi/src/precompiles/account_keychain.rs`: re-append the
+#     `impl AccountKeychainError { fn unauthorized_caller(), ... }` and
+#     `impl AccountKeychainEvent { fn key_authorized(), ... }` constructor blocks
+#     (alloy-sol-macro 1.5.6 doesn't auto-generate them; 1.6.0+ does)
+#   - `precompile-abi/src/precompiles/mod.rs`: add `authorizeKeyWithWitnessCall`
+#     to the `pub use account_keychain::{...}` list when new aliases land
+#   - `error.rs`: hand-merge any new variants into the trimmed SCI enum (we keep
+#     only `AccountKeychainError`, `SciAgentStateError`, `OutOfGas`, `Panic`,
+#     `UnknownFunctionSelector`, `Fatal`)
+
+# 6. Verify
+cargo check -p sci-revm-shim -p sci-precompiles -p sci-precompiles-macros \
+            -p sci-precompile-abi -p tempo-chainspec-shim
+cargo test  -p sci-precompiles --lib            # 319+ unit tests + 1 ignored
+cargo test  -p sci-precompiles --test hook_e2e  # 14 integration tests
 ```
 
-What the rename strategy buys you on merge: **`TempoHardfork::T4`** added upstream
-flows in automatically (just a new variant in `tempo-chainspec-shim/src/lib.rs`);
-all `if self.storage.spec().is_t4() { ... }` calls in business files compile without
-edits because the trait/method shape matches. Compare to the previous aggressive-rename
-strategy where every line containing `TempoHardfork` was a merge conflict.
-
 What still requires human review on merge:
+- New `TempoHardfork` variants — add to `tempo-chainspec-shim/src/lib.rs` with
+  matching `is_tX()` helpers.
 - New error variants added to `TempoPrecompileError` upstream — reconcile against our
-  trimmed enum in `error.rs` (we only keep `AccountKeychainError`, `SciAgentStateError`,
-  etc.).
-- New ABI methods added to `IAccountKeychain` — re-port the `.sol!` interface in
-  `sci/crates/precompile-abi/src/precompiles/account_keychain.rs`.
+  trimmed enum in `error.rs`.
+- New ABI methods / errors / events added to `IAccountKeychain` — propagate to the
+  `pub use account_keychain::{...}` list in `precompile-abi/src/precompiles/mod.rs`,
+  and add matching snake_case constructors to the SCI `impl AccountKeychainError`/
+  `impl AccountKeychainEvent` blocks.
 - Any business logic that depends on TIP-20 factory state — needs an SCI-specific
   reconciliation (currently the only known site is `validate_selector_rules`).
+- If upstream adds a new revm 38+ API surface that the shim doesn't yet expose
+  (e.g., a new `PrecompileOutput` method or a new field reference on `GasParams`):
+  extend `sci/crates/revm-shim/` rather than patching the verbatim source. See
+  "Shim crate maintenance" below.
+
+## Shim crate maintenance
+
+`sci/crates/revm-shim` is the load-bearing platform-adjustment layer. It does
+three jobs:
+
+1. **Re-export revm 34 verbatim** for every submodule Tempo verbatim source
+   touches (`context`, `handler`, `primitives`, `state`, ...).
+2. **Shadow `precompile` and `interpreter::gas`** with shim modules that expose
+   the v38-shape API on top of revm 34's actual data structures. The shadowed
+   `precompile::PrecompileOutput` is a fresh newtype carrying the v38 fields
+   (`state_gas_used`, `reservoir`, `status: ExecutionStatus`) plus the
+   `new/revert/halt` constructors that all accept a trailing `reservoir` arg.
+   The shadowed `interpreter::gas::GasTracker` is a no-op stub returning zero
+   counters.
+3. **Provide a boundary fn** `revm::precompile::to_revm34(out)` that the SCI
+   `install()` macro calls right before yielding a `DynPrecompile`. It folds
+   `Halt(OutOfGas)` → `Err(PrecompileError::OutOfGas)`, preserves bytes/gas for
+   success/revert, and yields a real revm 34 `PrecompileResult`.
+
+### Invariants
+
+- **The shim is additive.** It never removes or shadows any revm 34 item except
+  the two explicitly listed above. Adding new v38 surface here does not perturb
+  anything downstream that still binds to real `revm::precompile::PrecompileOutput`.
+- **The alias is scoped.** Only `sci/crates/precompiles/Cargo.toml` carries
+  `revm = { path = "../revm-shim", package = "sci-revm-shim" }`. Base crates,
+  `SciHandler`, and the rest of the workspace continue to depend on real revm 34.
+- **`reservoir = 0` and `amsterdam_eip8037_enabled = false` always.** SCI does
+  not adopt EIP-8037 / TIP-1016. Should we ever want to adopt state-gas
+  accounting, replacing the no-op stubs with real semantics is the place to start.
+
+### When upstream Tempo adds a new revm-38-only API call
+
+Three options in order of preference:
+
+1. **Extend the shim.** If the upstream call resolves to a missing item under
+   `revm::*`, add the stub to `sci-revm-shim` (e.g., a new method on
+   `PrecompileOutput`, a new field on `GasTracker`, a new extension trait on
+   `GasParams`). One commit, one place, future syncs work.
+2. **Add a one-line SCI patch.** If the upstream source needs an extra `use`
+   import to bring a shim extension trait into scope, document the patch in
+   Critical Rule #5 and re-apply it on each sync.
+3. **Last resort: sed-rewrite the source.** Only if (1) and (2) are infeasible.
+   Document the sed rule in the workflow above.
 
 ### SCI-only patches re-applied on each Tempo sync
 
@@ -260,21 +402,46 @@ just devnet status
 ## Key Rust Files (SCI)
 
 - `sci/crates/precompiles/src/lib.rs` — Precompile trait, helpers (input_cost, view/mutate,
-  SelectorSchedule, dispatch_call), `sci_precompile!` macro, and
+  SelectorSchedule, dispatch_call), `sci_precompile!` macro (wraps verbatim Tempo
+  precompile bodies with `to_revm34` at the `DynPrecompile` boundary), and
   `install(&mut PrecompilesMap, &CfgEnv<...>)` for host integration.
-- `sci/crates/precompiles/src/hardfork.rs` — `SciHardfork` enum (Genesis..T3).
-- `sci/crates/precompiles/src/error.rs` — `SciPrecompileError`, `PrecompileHalt` shim,
-  `IntoPrecompileResult`.
-- `sci/crates/precompiles/src/account_keychain/mod.rs` — Core keychain logic (~4300 lines,
-  from Tempo).
-- `sci/crates/precompiles/src/account_keychain/dispatch.rs` — ABI selector routing.
-- `sci/crates/precompiles/src/storage/` — EVM storage abstraction (~3800 lines, from Tempo).
-  Note: `storage/evm.rs` integration tests are gated behind the `evm-bridge-tests` feature
-  (off by default) — keychain coverage runs via `HashMapStorageProvider`.
-- `sci/crates/precompiles/src/test_util.rs` — selector-coverage + word-from-hex helpers.
-- `sci/crates/precompiles-macros/src/lib.rs` — Proc macros `#[contract]`, `#[derive(Storable)]`
-  (from Tempo, alloy umbrella paths → individual crates).
-- `sci/crates/precompile-abi/src/precompiles/account_keychain.rs` — `IAccountKeychain` ABI bindings.
+- `sci/crates/tempo-chainspec-shim/src/lib.rs` — `SciHardfork`/`TempoHardfork` enum
+  (Genesis..T6) + `is_tX()` helpers. No SpecId-derived metadata — SCI consults the
+  hardfork directly inside the precompile.
+- `sci/crates/revm-shim/` — Compat shim mapping revm 38's PrecompileOutput / Halt /
+  state-gas API onto Base v0.9's revm 34. Consumed by sci-precompiles only via
+  Cargo `package = ...` rename. See "Shim crate maintenance" above.
+- `sci/crates/precompiles/src/error.rs` — `SciPrecompileError` (`TempoPrecompileError`
+  alias), trimmed SCI variant subset, `IntoPrecompileResult` trait, From-impls
+  for `JournalLoadError<EvmInternalsError>` and `JournalLoadError<ErasedError>`.
+- `sci/crates/precompiles/src/account_keychain/mod.rs` — Core keychain logic from
+  Tempo v1.7.1 (~4900 lines including T5 witness API). Verbatim except SCI patches
+  enumerated in Critical Rule #5.
+- `sci/crates/precompiles/src/account_keychain/dispatch.rs` — ABI selector routing
+  (T3 + T5 schedules).
+- `sci/crates/precompiles/src/account_keychain/sci_ext.rs` — SCI-only extension
+  module: `key_is_active(account, key_id) -> Result<bool>` wrapper around
+  crate-private `load_active_key`, used by the pre-execution hook.
+- `sci/crates/precompiles/src/sci_agent_state/` — SCI-only CircuitBreaker trip-state
+  precompile (no Tempo equivalent).
+- `sci/crates/precompiles/src/handler/{mod,hook,decode}.rs` — SCI-only pre-execution
+  hook (CircuitBreaker → Scope → SpendingLimit). NOT a verbatim port of Tempo's
+  `crates/revm/src/handler.rs` keychain hook; different design point.
+- `sci/crates/precompiles/src/storage/` — EVM storage abstraction (~5000 lines, from
+  Tempo v1.7.1). Note: `storage/evm.rs` integration tests are gated behind the
+  `evm-bridge-tests` feature (off by default) — keychain coverage runs via
+  `HashMapStorageProvider`.
+- `sci/crates/precompiles/src/test_util.rs` — selector-coverage + word-from-hex helpers
+  + `TIP20Setup` no-op stub.
+- `sci/crates/precompiles-macros/src/{lib,storable,storable_primitives,packing,layout,utils}.rs`
+  — Proc macros `#[contract]`, `#[derive(Storable)]` (verbatim from Tempo v1.7.1;
+  alloy umbrella paths → individual crates via sed at sync time, including the new
+  `aliases::U96` etc. paths added in v1.7.1).
+- `sci/crates/precompile-abi/src/precompiles/account_keychain.rs` — `IAccountKeychain`
+  ABI bindings (T3 + T5 witness API). Carries a manual
+  `impl AccountKeychainError { fn unauthorized_caller() ... }` block plus
+  `impl AccountKeychainEvent { fn key_authorized() ... }` block as SCI patches —
+  alloy-sol-macro 1.6.0+ auto-generates these, but Base v0.9 is on 1.5.6.
 
 ## Key Solidity Files (SCI)
 
