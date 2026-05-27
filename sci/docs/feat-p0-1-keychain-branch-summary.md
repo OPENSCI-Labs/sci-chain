@@ -1,18 +1,20 @@
 ---
-title: "feat/p0-1-keychain Branch Summary — All Changes and Their Rationale"
-date: "2026-05-21"
-branch_base: "3049ce2e3 fix: error severity for invalid FC state -> reset (#2551)"
-branch_head: "7ac6fa65e sci: add devnet genesis patches + compose override for keychain"
-commits: 4
-files_changed: 70
-lines_added: 21840
-lines_removed: 26
+title: "feat/p0-1-keychain-tempo-v1.7.1 Branch Summary — All Changes and Their Rationale"
+date: "2026-05-27"
+branch_base: "0276bb4eb backport(v0.9.0): backport proof node related changes (#2802)"
+branch_head: "036e70d16 sci: port Tempo v1.7.1 keychain (T5 witness) via revm-shim compat crate"
+commits: 7
+files_changed: 88
+lines_added: 27701
+lines_removed: 25
+tempo_upstream: "v1.7.1"
+base_upstream: "v0.9.0"
 ---
 
-# feat/p0-1-keychain Branch Summary
+# feat/p0-1-keychain-tempo-v1.7.1 Branch Summary
 
-This document lists every change introduced on `feat/p0-1-keychain` since it
-diverged from the Base v0.8.0 mainline, organized by **why the change is
+This document lists every change introduced on `feat/p0-1-keychain-tempo-v1.7.1`
+since it diverged from the Base v0.9.0 mainline, organized by **why the change is
 necessary** rather than by file path. Its purpose is to let a reviewer or a
 future maintainer quickly answer:
 
@@ -20,61 +22,85 @@ future maintainer quickly answer:
 > mandatory? What is new, and what is shielded from Base entirely?"
 
 After reading it the reader should see that **the SCI fork's surface area
-against Base is small and deliberately constrained** — only 6 Base files are
+against Base is small and deliberately constrained** — only 7 Base files are
 modified plus 1 new Base file, all along the EVM-factory / handler-assembly
-path. Every other line of new code (21000+) lives under `sci/` and produces
+path. Every other line of new code (27,000+) lives under `sci/` and produces
 zero conflict with the Base mainline.
+
+This branch supersedes the earlier `feat/p0-1-keychain` line and folds in two
+significant upgrades:
+
+- **Base v0.8 → v0.9 uplift** — the upstream restructured `crates/common/evm/`,
+  renamed the chain binary (`based-bin` → `base`), and replaced the bare
+  `OpHandler` with an upstream `BaseHandler` wrapper. The SCI integration
+  points moved accordingly (see §2).
+- **Tempo v1.6.0 → v1.7.1 port** — Tempo v1.7.1 introduced the TIP-1053
+  "key authorization witness" API on a new T5 hardfork, along with a major
+  revm 34 → 38 jump that brought EIP-8037 / TIP-1016 state-gas + reservoir
+  accounting. SCI stays on revm 34 and absorbs the version gap with a new
+  compat shim (`sci-revm-shim`) so the upstream business source can be
+  copy-pasted verbatim on every future Tempo sync.
 
 ## 0. Commit Log
 
 | Commit | Title | Primary Purpose |
 |---|---|---|
-| `98df2b6ec` | sci: scaffold sci/ workspace directory structure | Lay out the `sci/` directory tree (`.gitkeep` placeholders + top-level README) so subsequent SCI work has a structured home |
-| `f08aaa3a5` | sci: replace CLAUDE.md with SCI Chain development guide | Replace the Base CLAUDE.md with an SCI-specific development guide covering architecture, critical rules, build commands |
-| `ef4914ea8` | sci: port keychain precompile and wire pre-execution hook | Port the keychain precompile from Tempo v1.6.0 to SCI and wire its pre-execution hook into the Base EVM factory |
-| `7ac6fa65e` | sci: add devnet genesis patches + compose override for keychain | Fix the EIP-161 genesis-alloc gap that surfaced during devnet integration testing; add the image-tag isolation override |
+| `a119bc77c` | sci: scaffold sci/ workspace directory structure | Lay out the `sci/` directory tree (`.gitkeep` placeholders + top-level README) so subsequent SCI work has a structured home |
+| `0be1a4b6d` | sci: replace CLAUDE.md with SCI Chain development guide | Replace the Base CLAUDE.md with an SCI-specific development guide covering architecture, critical rules, build commands |
+| `05acf216d` | sci: port keychain precompile and wire pre-execution hook | Initial port of the keychain precompile from Tempo v1.6.0 to SCI and wire its pre-execution hook into the Base EVM factory |
+| `864830d53` | sci: add devnet genesis patches + compose override for keychain | Fix the EIP-161 genesis-alloc gap that surfaced during devnet integration testing; add the image-tag isolation override |
+| `e25fadcee` | sci: enforce English-only doc policy and add branch summary | Codify CLAUDE.md Critical Rule #7 (English-only public docs, gitignored `sci/docs/analysis/` for working notes) and add the initial branch summary document |
+| `4e291020e` | sci: harden pre-execution hook and document keychain semantics | Address P0-1 code review findings R5/R6/R7/R9 — defensive deposit-tx gate, drop redundant 7702 re-read in post-deduction, document `remove_allowed_calls` and `getKey` semantics in `sci_ext.rs` |
+| `036e70d16` | sci: port Tempo v1.7.1 keychain (T5 witness) via revm-shim compat crate | Upgrade keychain to Tempo v1.7.1 (T5 witness API) on top of Base v0.9; introduce `sci-revm-shim` to bridge the revm 34 ↔ 38 API gap so verbatim porting stays tractable |
 
 ## 1. Aggregate Change Footprint
 
 ```
-70 files changed, 21840 insertions(+), 26 deletions(-)
+88 files changed, 27701 insertions(+), 25 deletions(-)
 ```
 
 Broken down by category:
 
 | Category | Files | Lines Added |
 |---|---|---|
-| Base file modifications (existing files, minimal edits) | 6 | ~50 |
+| Base file modifications (existing files, minimal edits) | 7 | ~78 |
 | Base file additions (only 1 new file, lives in `base-common-evm`) | 1 | 173 |
-| CLAUDE.md (rewritten) | 1 | +536 / -353 (net +183) |
-| `Cargo.toml` / `Cargo.lock` (workspace registration of `sci-*` crates) | 2 | ~454 |
-| `sci/crates/precompiles/` (keychain business code + storage abstraction + tests) | 24 | ~16,000 |
-| `sci/crates/precompiles-macros/` (`Storable` / `contract` proc macros) | 7 | ~3,300 |
-| `sci/crates/precompile-abi/` (ABI interface `sol!` bindings) | 10 | ~500 |
-| `sci/crates/tempo-chainspec-shim/` (compatibility shim) | 2 | ~98 |
+| CLAUDE.md (rewritten + extended for v1.7.1 + shim crate) | 1 | +725 / -10 (net +715) |
+| `Cargo.toml` / `Cargo.lock` (workspace registration of `sci-*` crates) | 2 | ~86 |
+| `sci/crates/precompiles/` (keychain business code + storage abstraction + tests) | 25 | ~18,300 |
+| `sci/crates/precompiles-macros/` (`Storable` / `contract` proc macros) | 7 | ~3,600 |
+| `sci/crates/precompile-abi/` (ABI interface `sol!` bindings) | 10 | ~600 |
+| `sci/crates/tempo-chainspec-shim/` (compatibility shim, expanded to T6) | 2 | ~131 |
+| `sci/crates/revm-shim/` (**NEW** — revm 34 ↔ 38 compat shim) | 5 | ~513 |
 | `sci/devnet/` (devnet test configuration) | 4 | ~108 |
-| `sci/docs/` (committed development documentation) | 1 | this file (the previously committed devnet test report is gitignored under `analysis/` per CLAUDE.md Rule #7) |
+| `sci/docs/` (this committed summary; `analysis/` is gitignored) | 1 | 453 |
 | `sci/contracts/` / `sci/gateway/` (placeholder directories) | 9 | 0 (`.gitkeep` only) |
 
 ---
 
-## 2. Base File Modifications (**Exactly 7 files, hard-capped by CLAUDE.md Critical Rule #2**)
+## 2. Base File Modifications (**8 files total: 7 modified + 1 new**)
 
-CLAUDE.md explicitly caps Base modifications at "ONLY 7 Base files are touched"
-in the `sci:` namespace convention section. These 7 files all serve a **single
-engineering goal**: insert the SCI precompiles and the pre-execution hook into
-Base's EVM assembly path **without forking, replacing, or duplicating any
-upstream module**.
+CLAUDE.md Critical Rule #2 caps Base modifications at a fixed set. These files
+all serve a **single engineering goal**: insert the SCI precompiles and the
+pre-execution hook into Base's EVM assembly path **without forking, replacing,
+or duplicating any upstream module**.
+
+> **Note**: CLAUDE.md currently lists 7 Base files. In practice the diff also
+> touches `crates/common/evm/src/api/exec.rs` (§2.8) with a trait-bounds patch
+> implicitly required by the `SciHandler` integration. That makes the real
+> count 8. A follow-up edit should reconcile CLAUDE.md to either include
+> `api/exec.rs` explicitly or move the trait bounds elsewhere.
 
 ### 2.1 `Cargo.toml` (workspace root)
 
 **Change**:
 - `workspace.members` gains `sci/crates/precompiles`, `sci/crates/precompiles-macros`,
-  `sci/crates/precompile-abi`, `sci/crates/tempo-chainspec-shim`
-- `workspace.dependencies` gains the four matching crates (`sci-precompiles`,
-  `sci-precompiles-macros`, `sci-precompile-abi`, `tempo-chainspec-shim`) with
-  `package = "..."` renames so verbatim-ported Tempo source files can still
-  refer to upstream paths like `tempo_*`
+  `sci/crates/precompile-abi`, `sci/crates/tempo-chainspec-shim`, and
+  `sci/crates/revm-shim`
+- `workspace.dependencies` gains the five matching crates (`sci-precompiles`,
+  `sci-precompiles-macros`, `sci-precompile-abi`, `tempo-chainspec`,
+  `sci-revm-shim`) with `package = "..."` renames so verbatim-ported Tempo
+  source files can still refer to upstream paths like `tempo_*`
 
 **Why this change is mandatory**:
 - Rust workspaces are a hard constraint — SCI crates must be listed in
@@ -82,13 +108,14 @@ upstream module**.
   shared `target/` directory.
 - The `package = "..."` rename is the **core mechanism enabling "verbatim
   Tempo source porting"**: upstream Tempo uses paths like
-  `tempo_chainspec::hardfork::TempoHardfork`, while SCI's actual crate names
-  are `sci-precompiles` / `tempo-chainspec-shim`. The rename layer keeps both
-  sides happy without rewriting any source.
+  `tempo_chainspec::hardfork::TempoHardfork` and `tempo_precompiles_macros::*`,
+  while SCI's actual crate names are `sci-precompiles` / `tempo-chainspec-shim` /
+  `sci-precompiles-macros`. The rename layer keeps both sides happy without
+  rewriting any source.
 
 ### 2.2 `Cargo.lock`
 
-**Change**: 294 lines (new dependency resolution).
+**Change**: ~59 lines (new dependency resolution including `sci-revm-shim`).
 
 **Why**: lock files necessarily evolve with `Cargo.toml`, and reproducible
 builds require them to be committed.
@@ -100,17 +127,19 @@ builds require them to be committed.
 **Why**:
 - Base's EVM factory (the `base-common-evm` crate) needs to call
   `sci_precompiles::install(...)` to register the SCI precompiles in the
-  `PrecompilesMap`.
+  `PrecompilesMap`, and `SciHandler` needs to consume types from
+  `sci_precompiles` (`HookOutcome`, `run_pre_execution_hook`,
+  `apply_post_execution_deductions`).
 - This is the single dependency edge between Base and SCI.
 
 ### 2.4 `crates/common/evm/src/factory.rs`
 
-**Change**: +14 lines net. Inside both `BaseEvmFactory::create_evm` and its
+**Change**: +17 lines net. Inside both `BaseEvmFactory::create_evm` and its
 `_with_inspector` variant, immediately after `PrecompilesMap::from_static(...)`
 the factory now calls `sci_precompiles::install(&mut precompiles, &input.cfg_env)`.
 
 **Why**:
-- Base v0.8's EVM assembly hard-codes the Ethereum standard precompiles via
+- Base v0.9's EVM assembly hard-codes the Ethereum standard precompiles via
   `BasePrecompiles::new_with_spec`. SCI precompile addresses (`0xAAAA...0000`
   and `0xAAAA...0001`) are absent from that set and must be added during
   assembly.
@@ -125,7 +154,7 @@ the factory now calls `sci_precompiles::install(&mut precompiles, &input.cfg_env
 
 **Why**:
 - The new `sci_handler.rs` file (see §2.6) must be exported from `lib.rs`
-  so that `exec.rs` can `use` `SciHandler`.
+  so that `evm.rs` can `use` `SciHandler`.
 - The reason `sci_handler.rs` lives in `base-common-evm` (rather than under
   `sci/`) is to **avoid a dependency cycle**: `sci-precompiles` already
   depends on `base-common-evm` for shared types, so the reverse cannot hold.
@@ -134,12 +163,17 @@ the factory now calls `sci_precompiles::install(&mut precompiles, &input.cfg_env
 
 ### 2.6 `crates/common/evm/src/sci_handler.rs` (**the only new Base file**)
 
-**173 lines of new code.** `SciHandler<EVM, ERROR, FRAME>` wraps `OpHandler`
-and delegates every Handler trait method verbatim — **except**
+**173 lines of new code.** `SciHandler<EVM, ERROR, FRAME>` wraps Base v0.9's
+`BaseHandler` (which itself wraps `MainnetHandler` upstream) and delegates
+every Handler trait method verbatim — **except**
 `validate_against_state_and_deduct_caller`, which first checks
 `tx_type == DEPOSIT_TRANSACTION_TYPE` (OP-Stack predeploy-tick path) and only
 when the tx is not a deposit does it call
-`sci_precompiles::run_pre_execution_hook` to apply keychain checks.
+`sci_precompiles::run_pre_execution_hook` to apply keychain checks. The
+post-execution counterpart, `execution_result`, similarly invokes
+`sci_precompiles::apply_post_execution_deductions` once the inner result is
+known to be `Ok`, to apply spending-limit deductions only on successful
+agent-tx execution.
 
 **Why this file is mandatory**:
 - The pre-execution hook (CircuitBreaker → Scope → SpendingLimit) must fire
@@ -147,15 +181,16 @@ when the tx is not a deposit does it call
   nonce bumped, but before any per-call body runs. Otherwise the hook cannot
   fail-fast without wasting gas.
 - revm's `Handler` trait is the only clean place to intercept that point.
-- A wrapper rather than a fork keeps upstream `OpHandler` visible and
-  reviewable; we override exactly one method.
+- A wrapper rather than a fork keeps upstream `BaseHandler` visible and
+  reviewable; we override exactly two methods (pre-exec validation +
+  post-exec result).
 - System-call paths (deposit transactions and OP-Stack system calls) bypass
   the hook entirely via the `tx_type` short-circuit, ensuring OP-Stack
   predeploy ticks remain unaffected.
 
-### 2.7 `crates/common/evm/src/api/exec.rs`
+### 2.7 `crates/common/evm/src/evm.rs` (**handler-swap site — v0.9 location**)
 
-**Change**: +24 / -24 lines. Five `OpHandler::<_, _, EthFrame<EthInterpreter>>::new()`
+**Change**: 12 lines net. Five `BaseHandler::<_, _, EthFrame<EthInterpreter>>::new()`
 construction sites are swapped to `SciHandler::<_, _, EthFrame<EthInterpreter>>::new()`:
 - `transact_one`
 - `replay`
@@ -163,89 +198,131 @@ construction sites are swapped to `SciHandler::<_, _, EthFrame<EthInterpreter>>:
 - `system_call_one_with_caller`
 - `inspect_one_system_call_with_caller`
 
-The `OpContextTr` definition in the same file also gains two trait bounds:
-`Db: alloy_evm::Database` and `Journal: Debug`.
+**Why this moved from `api/exec.rs` to `evm.rs`**: Base v0.9 restructured
+`crates/common/evm/`. In v0.8 the handler instantiations lived in
+`crates/common/evm/src/api/exec.rs`; v0.9 turned `exec.rs` into a
+trait-alias-only module (`BaseContextTr` lives there now) and relocated the
+actual handler construction call sites into `evm.rs`. The SCI patch follows
+upstream — the five sites are functionally identical, just at a new path.
+
+**Why all five sites swap**: every execution entry point must flow through
+`SciHandler`. System-call paths get the wrapper too, but the `tx_type`
+short-circuit inside `sci_handler.rs` early-returns them without performing
+keychain work.
+
+### 2.8 `crates/common/evm/src/api/exec.rs` (**trait-bounds patch**)
+
+**Change**: +13 / -2 lines. The `BaseContextTr` trait alias (and its blanket
+`impl`) gains two new bounds:
+
+```rust
+Db: alloy_evm::Database,
+Journal: JournalTr<State = EvmState, Database: alloy_evm::Database> + core::fmt::Debug,
+```
+
+A doc comment explicitly marks the addition as `**SCI patch**` so future Base
+upstream merges can identify it.
 
 **Why**:
-- `exec.rs` is where Base actually instantiates the EVM handler. The SCI
-  hook only takes effect if we substitute `SciHandler` here.
-- All five sites swap for consistency: every execution entry point flows
-  through `SciHandler`. System-call paths get the wrapper too, but the
-  `tx_type` short-circuit inside `sci_handler.rs` early-returns them.
-- The two new trait bounds are hard requirements of the `EvmInternals`
-  construction inside the hook. Every concrete Base context type already
-  satisfies them, so the addition is harmless and non-breaking.
+- `SciHandler`'s pre-execution hook constructs an `alloy_evm::EvmInternals`,
+  whose `new` constructor requires the journal to be `Debug`.
+- The two new bounds are hard requirements of that construction. Every
+  concrete `BaseContext<DB>` instance Base actually uses (`State<...>`,
+  `InMemoryDB`, `EmptyDB`) already satisfies them, so adding the bounds here
+  is non-breaking for upstream Base callers in practice.
+- In v0.8 the equivalent bounds lived on `OpContextTr`; v0.9 collapsed that
+  into `BaseContextTr` (now upstream-owned), so the bounds had to move with
+  it. This is the file CLAUDE.md should add to its "7 files" list — see the
+  note at the top of §2.
 
-### 2.8 `CLAUDE.md` (rewritten)
+### 2.9 `CLAUDE.md` (rewritten + extended)
 
-**Change**: +536 / -353 lines. The Base-provided CLAUDE.md is replaced by an
-SCI development guide.
+**Change**: +725 / -10 lines (net +715). The Base-provided CLAUDE.md is
+replaced by an SCI development guide; the v1.7.1 sync added another ~290
+lines covering shim-crate strategy and updated workflow.
 
 **Why**:
 - The SCI fork has different conventions from Base mainline development:
   chain ID 42001, do-not-`fmt` rules on Base files, SCI naming conventions,
   Tempo synchronization workflow, devnet red lines, and so on.
+- The v0.9 + v1.7.1 uplift expanded the rule set to cover: the shim-crate
+  pattern (`sci-revm-shim` invariants and extension workflow), Tempo sync
+  with verbatim-cp + sed sweep + SCI-patch-reapply checklist, EIP-161
+  alloc-gap fix, devnet image-tag convention (`:local` vs `:sci` vs
+  `:sci-dev-broken`), and the English-only doc policy (Critical Rule #7).
 - Centralising these rules in CLAUDE.md spares the author from re-explaining
   them and gives any AI collaborator a single source of truth to follow.
 - The original Base style rules ("Base Upstream Style Rules" section) are
   retained intact as inherited policy.
 
-### 2.9 `etc/docker/devnet-env` (**not in this branch's diff**, committed earlier)
+### 2.10 `etc/docker/devnet-env` (**documented in CLAUDE.md but not yet patched on disk**)
 
 CLAUDE.md Critical Rule #2 lists `etc/docker/devnet-env` (chain ID = 42001) as
-one of the 7 modified Base files. **It is not modified on this branch** — it
-was changed earlier during the Base scaffold phase before the merge base.
+one of the 7 modified Base files. **The actual file on this branch still reads
+`L2_CHAIN_ID=84538453`** — the v0.9 uplift documented the override but never
+reconciled the value. The remote devnet has its own copy of `devnet-env` with
+chain ID 42001 (kept out of the rsync per the deployment runbook — see the
+`project-devnet-v1-7-1-deployment` user memory), so production behaviour is
+unaffected. A follow-up should either patch the in-repo file or update CLAUDE.md
+to remove this line from the "7 modified" list.
 
 ---
 
 ## 3. SCI Rust Crates (entirely under `sci/crates/`, zero overlap with Base)
 
-Four independent crates that together implement the keychain precompile.
+Five independent crates that together implement the keychain precompile and the
+revm 34 ↔ 38 compatibility surface.
 
-### 3.1 `sci/crates/precompiles/` (~16,000 lines)
+### 3.1 `sci/crates/precompiles/` (~18,300 lines, 25 files)
 
 **The core crate** — all precompile business logic, the EVM-backed storage
 abstraction, and the integration tests.
 
 | Module | Lines | Purpose |
 |---|---|---|
-| `account_keychain/mod.rs` | 4,328 | Keychain business core: authorize / revoke / spending limits / call scopes |
-| `account_keychain/dispatch.rs` | 365 | ABI selector routing (with T3 hardfork scheduling) |
-| `account_keychain/sci_ext.rs` | 38 | **SCI-only extension**: exposes `key_is_active` to the hook (crate-private upstream in Tempo) |
-| `sci_agent_state/mod.rs` | 227 | **SCI-only second precompile**: CircuitBreaker trip state |
+| `account_keychain/mod.rs` | 4,705 | Keychain business core (Tempo v1.7.1 verbatim with SCI patches): authorize / revoke / spending limits / call scopes; the T5 witness API (`authorizeKey_2`, `burnKeyAuthorizationWitness`, `isKeyAuthorizationWitnessBurned`) is included |
+| `account_keychain/dispatch.rs` | 444 | ABI selector routing (T3 + T5 selector schedules) |
+| `account_keychain/sci_ext.rs` | 68 | **SCI-only extension**: exposes `key_is_active` and `transaction_key_raw` to the hook (both crate-private upstream in Tempo); doc comments document `remove_allowed_calls` scoped-deny-all behaviour and `getKey` isRevoked semantics |
+| `sci_agent_state/mod.rs` | 227 | **SCI-only second precompile**: CircuitBreaker trip state (Tempo has no equivalent) |
 | `sci_agent_state/dispatch.rs` | 63 | Same, ABI routing |
-| `storage/evm.rs` | 699 | EVM-backed storage provider (production path) |
-| `storage/hashmap.rs` | 284 | In-memory backend (unit-test path) |
+| `storage/evm.rs` | 1,199 | EVM-backed storage provider (production path); Tempo v1.7.1 verbatim with three SCI patches: `cfg.enable_amsterdam_eip8037` → literal `false`, `GasParamsExt` import for shim trait, integration tests gated behind the `evm-bridge-tests` feature |
+| `storage/hashmap.rs` | 327 | In-memory backend (unit-test path); `JournalCheckpoint` literal drops `selfdestructed_i` (revm 34 has no such field) |
+| `storage/mod.rs` | 192 | Storage provider trait |
 | `storage/packing.rs` | 1,180 | Field packing/unpacking logic (lets `sigType+expiry+enforce+revoked` share one slot) |
-| `storage/thread_local.rs` | 587 | `StorageCtx` thread-local plus the various `enter_*` entry points |
-| `storage/types/{mapping,vec,set,array,slot,bytes_like,primitives,mod}.rs` | ~6,300 | The `Storable` type system: `Mapping<K, V>`, `Vec<T>`, `Set`, fixed-length arrays, byte strings, primitive scalars |
-| `handler/hook.rs` | 294 | **Main pre-execution hook logic**: 7702 delegation detection, batch decoding, CB check, scope and spending check, checkpoint rollback |
+| `storage/thread_local.rs` | 609 | `StorageCtx` thread-local plus the various `enter_*` entry points |
+| `storage/types/{mapping,vec,set,array,slot,bytes_like,primitives,mod}.rs` | ~6,700 | The `Storable` type system: `Mapping<K, V>`, `Vec<T>`, `Set`, fixed-length arrays, byte strings, primitive scalars (v1.7.1 added the `array.rs` module) |
+| `handler/hook.rs` | 304 | **Main pre-execution hook logic**: 7702 delegation detection, batch decoding, CB check, scope and spending check, checkpoint rollback (R5 defensive deposit-tx gate added) |
 | `handler/decode.rs` | 204 | Decodes the `SCIAgentDelegator::execute(Call[])` calldata |
 | `handler/mod.rs` | 25 | Public API: `run_pre_execution_hook` / `apply_post_execution_deductions` |
-| `error.rs` | 283 | `SciPrecompileError` enum and `IntoPrecompileResult` |
-| `lib.rs` | 304 | `Precompile` trait, `install(...)`, `sci_precompile!` macro, `SelectorSchedule`, `dispatch_call` |
-| `test_util.rs` | 130 | `TIP20Setup` stub (Tempo upstream has a real TIP-20 factory; SCI uses ERC-20 and thus stubs the setup) |
-| `tests/hook_e2e.rs` | 679 | **14 end-to-end hook integration tests** (strong R1, partial batch failure, CB, etc.) |
+| `error.rs` | 267 | `SciPrecompileError` enum, `IntoPrecompileResult` trait, v1.7.1 reservoir-threading shape with halt-based OOG |
+| `lib.rs` | 339 | `Precompile` trait, `install(...)`, `sci_precompile!` macro (wraps verbatim Tempo precompile bodies with `to_revm34` at the `DynPrecompile` boundary), `SelectorSchedule`, `dispatch_call`; `install()` now registers `AccountKeychain` at `TempoHardfork::T5` so the witness API is active by default |
+| `test_util.rs` | 130 | `TIP20Setup` stub (Tempo upstream has a real TIP-20 factory; SCI uses ERC-20 and stubs the setup); selector-coverage + word-from-hex helpers |
+| `tests/hook_e2e.rs` | 680 | **14 end-to-end hook integration tests** (strong R1, partial batch failure, CB, etc.) |
 
 **Why this crate is mandatory**:
 - This is SCI's core value-add — the AI-agent keychain. Without it, SCI is
-  indistinguishable from Base v0.8.
-- About 80% is verbatim from Tempo v1.6.0 (business source, macros, storage
-  abstraction). The remaining 20% is SCI-specific:
-  - `account_keychain/sci_ext.rs`: SCI exposes `key_is_active`
-    (crate-private upstream) so the hook can probe it.
+  indistinguishable from Base v0.9.
+- About 80% is verbatim from Tempo v1.7.1 (business source, macros, storage
+  abstraction, ABI bindings). The remaining 20% is SCI-specific:
+  - `account_keychain/sci_ext.rs`: SCI exposes `key_is_active` and
+    `transaction_key_raw` (both crate-private upstream) so the hook and
+    `SciHandler::execution_result` can probe them.
   - `sci_agent_state/`: a CircuitBreaker state precompile that Tempo does
     not have — SCI-only protocol state.
   - `handler/`: Tempo writes the hook in `revm/src/handler.rs`. SCI puts
     it here because a reverse import would cycle (see §2.5).
   - Alloy path adjustments: Tempo uses the `alloy` umbrella crate; Base
     uses the individual crates (`alloy_primitives`, etc.). Every ported
-    file is path-adjusted accordingly.
+    file is path-adjusted via the sed sweep on each sync, including the
+    new `::alloy::primitives::aliases::U96` paths v1.7.1 introduced.
+  - `is_tip20()` stubbed to always return `true` — SCI applies recipient
+    restrictions to any transfer/approve target without TIP-20 prefix
+    checks, since SCI doesn't ship the TIP-20 factory.
 
-### 3.2 `sci/crates/precompiles-macros/` (~3,300 lines)
+### 3.2 `sci/crates/precompiles-macros/` (~3,600 lines, 7 files)
 
 The `#[contract]` and `#[derive(Storable)]` proc-macro implementation, **ported
-verbatim from Tempo**.
+verbatim from Tempo v1.7.1**.
 
 | File | Purpose |
 |---|---|
@@ -264,17 +341,17 @@ verbatim from Tempo**.
 - Without these macros the keychain business code would need to hand-write
   every storage access — roughly 10× the code and significantly more
   error-prone.
-- The macros themselves are nontrivial (packing/layout algorithms), so 3,300
-  lines is proportionate.
+- The macros themselves are nontrivial (packing/layout algorithms); the
+  size is proportionate.
 
-### 3.3 `sci/crates/precompile-abi/` (~500 lines)
+### 3.3 `sci/crates/precompile-abi/` (~600 lines, 10 files)
 
 ABI definitions. alloy's `sol!` macro produces Solidity-interface declarations
 shared between Rust and TypeScript consumers.
 
 | File | Purpose |
 |---|---|
-| `precompiles/account_keychain.rs` | `IAccountKeychain` interface (authorizeKey / revokeKey / getKey / etc.) |
+| `precompiles/account_keychain.rs` | `IAccountKeychain` interface — T3 base API plus the T5 witness API (`authorizeKey_2`, `burnKeyAuthorizationWitness`, `isKeyAuthorizationWitnessBurned`). Carries a manual `impl AccountKeychainError { fn unauthorized_caller() ... }` block plus `impl AccountKeychainEvent { fn key_authorized() ... }` block as SCI patches — alloy-sol-macro 1.6.0+ auto-generates these, but Base v0.9 is pinned to 1.5.6 |
 | `precompiles/sci_agent_state.rs` | `ISciAgentState` interface (tripKey / isTripped / etc.) |
 | `precompiles/common_errors.rs` | Shared error types |
 | `precompiles/tip20.rs` | TIP-20 interface (SCI uses the selectors as identifiers; the protocol is unimplemented) |
@@ -282,16 +359,17 @@ shared between Rust and TypeScript consumers.
 | `predeploys/sci_agent_delegator.rs` | `SCIAgentDelegator::execute(Call[])` interface (the hook decodes calldata via this) |
 
 **Why mandatory**:
-- Centralising ABI definitions in a single crate means dispatch.rs, hook
+- Centralising ABI definitions in a single crate means `dispatch.rs`, hook
   decoding, and external consumers all import from one place.
 - alloy's `sol!` generates compile-time type-safe encode/decode code,
   significantly more reliable than hand-written ABI parsing.
 
-### 3.4 `sci/crates/tempo-chainspec-shim/` (~98 lines)
+### 3.4 `sci/crates/tempo-chainspec-shim/` (~131 lines, 2 files)
 
-A 30-line `Cargo.toml` plus an 84-line `lib.rs` — a minimal compatibility
+A 14-line `Cargo.toml` plus a 117-line `lib.rs` — a minimal compatibility
 shim that exposes `tempo_chainspec::hardfork::TempoHardfork` along with the
-SCI-facing alias `SciHardfork`.
+SCI-facing alias `SciHardfork`. v1.7.1 expanded the enum to include `T4`,
+`T5`, and `T6` with matching `is_tX()` helpers.
 
 **Why mandatory**:
 - Upstream Tempo provides a full `tempo_chainspec` crate (chainspec + hardfork
@@ -304,9 +382,51 @@ SCI-facing alias `SciHardfork`.
 
 This is one of the key engineering artefacts of the "verbatim port" strategy.
 
+### 3.5 `sci/crates/revm-shim/` (~513 lines, 5 files) — **NEW IN v1.7.1**
+
+The load-bearing platform-adjustment layer. It is the **single biggest
+engineering investment** in the v1.6.0 → v1.7.1 uplift and is what allows the
+rest of Tempo to be ported verbatim.
+
+| File | Purpose |
+|---|---|
+| `Cargo.toml` (15 lines) | Re-exports `revm = "34"` from Base; declares itself as `package = "sci-revm-shim"` |
+| `src/lib.rs` (69 lines) | Top-level re-exports: every revm 34 submodule (`context`, `handler`, `primitives`, `state`, ...) plus the shadowed `precompile` and `interpreter::gas` modules |
+| `src/precompile.rs` (256 lines) | The shadowed `precompile` module: a `PrecompileOutput` newtype carrying the v38 fields (`state_gas_used`, `reservoir`, `status: ExecutionStatus`), `PrecompileHalt` enum, constructors `new/revert/halt`, and the boundary fn `to_revm34(out)` that folds shim outputs back into real revm 34 `PrecompileResult` |
+| `src/interpreter.rs` (132 lines) | The shadowed `interpreter::gas` module: a no-op `GasTracker` stub returning zero counters (SCI does not adopt state-gas accounting) |
+| `src/gas_params_ext.rs` (41 lines) | `GasParamsExt` trait providing `code_deposit_state_gas` / `create_state_gas` / `sstore_state_gas` as no-op stubs on revm 34's `GasParams`, so verbatim Tempo source that calls these compiles unchanged |
+
+**The mechanism**: `sci/crates/precompiles/Cargo.toml` declares
+`revm = { path = "../revm-shim", package = "sci-revm-shim" }`. Every
+`use revm::*;` in verbatim Tempo source then resolves through the shim. At
+the `DynPrecompile` boundary, `revm::precompile::to_revm34(out)` (defined in
+the shim) folds shim outputs back into revm 34 results: `Halt(OutOfGas)` →
+`Err(PrecompileError::OutOfGas)`; success/revert preserve bytes + gas.
+
+**Why mandatory**:
+- Tempo v1.7.1 runs on revm 38 + alloy-evm 0.34. Base v0.9 is pinned to revm
+  34 + alloy-evm 0.27.3. Without the shim, every reference to the v38-shape
+  `PrecompileOutput` (with `state_gas_used` / `reservoir` / `status` fields,
+  `::halt(reason, reservoir)` constructor, etc.) in upstream business source
+  would need to be sed-rewritten on every sync.
+- With the shim, the verbatim-cp workflow stays tractable. Upgrading to a
+  hypothetical Tempo v1.7.2 / v1.8.x that adds new revm-38-only API surface
+  becomes a contained operation: extend the shim, not the business source.
+
+**Invariants** (codified in CLAUDE.md "Shim crate maintenance"):
+- The shim is **additive**. It never removes or shadows any revm 34 item
+  except `precompile` and `interpreter::gas`.
+- The alias is **scoped to `sci-precompiles` only**. Base crates, `SciHandler`,
+  and the rest of the workspace continue to depend on real revm 34.
+- `reservoir = 0` and `amsterdam_eip8037_enabled = false` always — SCI does
+  not adopt EIP-8037 / TIP-1016.
+
+**Coverage**: 7 unit tests in `precompile.rs` (newtype constructors + halt
+round-trip + `to_revm34` boundary).
+
 ---
 
-## 4. SCI Devnet Configuration (`sci/devnet/`, the 4 files added in this branch)
+## 4. SCI Devnet Configuration (`sci/devnet/`, 4 files)
 
 | File | Lines | Purpose |
 |---|---|---|
@@ -315,7 +435,7 @@ This is one of the key engineering artefacts of the "verbatim port" strategy.
 | `apply-sci-allocs.sh` | 67 | jq merge script that injects `sci-allocs.json` into the `genesis.json` produced by op-deployer |
 | `.gitkeep` | 0 | Placeholder |
 
-**Why these files were added** (the gap surfaced during this session):
+**Why these files exist** (the gap surfaced during the May 2026 devnet sessions):
 - SCI precompile addresses (`0xAAAA...0000` and `0xAAAA...0001`) are absent
   from the genesis allocs that op-deployer produces by default.
 - revm treats an address with no alloc record as a newly-created empty
@@ -331,9 +451,8 @@ This is one of the key engineering artefacts of the "verbatim port" strategy.
   coexist on the same devnet host.
 
 (The detailed root-cause analysis, debugging trail, and end-to-end runtime
-environment changes from this debugging session are kept locally under
-`sci/docs/analysis/` — gitignored per CLAUDE.md Critical Rule #7. They are
-intentionally not in the public repo.)
+environment changes from the debugging sessions are kept locally under
+`sci/docs/analysis/` — gitignored per CLAUDE.md Critical Rule #7.)
 
 ---
 
@@ -342,10 +461,10 @@ intentionally not in the public repo.)
 | File | Purpose |
 |---|---|
 | `feat-p0-1-keychain-branch-summary.md` (this file) | What lives on the branch and why |
-| `sci/docs/analysis/` (gitignored) | Working notes, dev-period analysis docs, debugging trails. Not committed. |
+| `sci/docs/analysis/` (gitignored) | Working notes, dev-period analysis docs, debugging trails. Not committed per CLAUDE.md Critical Rule #7 (English-only public docs policy) |
 
 **Why this file is mandatory**:
-- The branch contains 21,000+ added lines and touches a delicate Base
+- The branch contains 27,000+ added lines and touches a delicate Base
   boundary. A reviewer who jumps in cold needs a guided tour, not just a
   diff.
 - This is the document that fulfils that role.
@@ -368,61 +487,93 @@ intentionally not in the public repo.)
 ## 7. Engineering Principles Distilled
 
 Abstracting "why these changes are mandatory" one level up, the branch
-adheres to four engineering principles:
+adheres to five engineering principles:
 
-### Principle 1: Minimise Base file modifications (hard-capped at 7)
+### Principle 1: Minimise Base file modifications (hard-capped)
 
 **Why**:
 - It guarantees that an upstream Base merge can only conflict in one
   bounded set of files.
 - AI collaborators and new contributors won't "casually" edit Base files
   (CLAUDE.md explicitly forbids it).
-- Any new Base modification must be added to CLAUDE.md's "7 files" list
-  and individually justified.
+- Any new Base modification must be added to CLAUDE.md's list and
+  individually justified.
 
 ### Principle 2: Use Cargo `package = "..."` renames to enable verbatim Tempo porting
 
 **Why**:
 - Upstream Tempo is SCI's primary source for keychain logic and will keep
-  evolving.
+  evolving (v1.6.0 → v1.7.1 added the T5 witness API; v1.8.x will follow).
 - Renaming identifiers in the source (`tempo_*` → `sci_*`) would cause
   large merge conflicts on every Tempo upgrade.
 - Cargo renames keep source files unchanged; the mapping lives in a single
   place — the workspace `Cargo.toml`.
-- The only deviation that resists this rule is the alloy path difference
-  (Tempo uses the umbrella crate, Base uses individual crates); that's a
-  one-shot path replacement.
 
-### Principle 3: Every SCI-specific divergence is documented in CLAUDE.md "Critical Rules"
+### Principle 3: Absorb cross-version platform drift in shim crates, not source patches
+
+**Why** (new principle introduced with the v1.7.1 uplift):
+- The revm 34 → 38 gap (state-gas + reservoir model, new `PrecompileOutput`
+  shape, halt-based OOG) could have been absorbed with dozens of one-line
+  edits scattered across the ported source. Instead `sci-revm-shim`
+  consolidates the entire delta in one ~500-line additive crate.
+- The `tempo-chainspec-shim` follows the same pattern at a smaller scale.
+- The cost is one extra crate; the benefit is that every Tempo sync from
+  now on is `cp` + sed sweep + a short, stable patch list, instead of an
+  open-ended audit.
+
+### Principle 4: Every SCI-specific divergence is documented in CLAUDE.md "Critical Rules"
 
 **Why**:
 - For example: `is_tip20()` stubbed to return true, `test_util::TIP20Setup`
-  no-op, the ignored-test list.
+  no-op, the ignored-test list, the `enable_amsterdam_eip8037` hardcoded
+  `false`, the `selfdestructed_i` literal omission, the manual
+  `AccountKeychainError`/`AccountKeychainEvent` constructor blocks.
 - These are deliberate SCI design choices (not bugs); recording them in
   CLAUDE.md ensures future Tempo upgrades don't reintroduce upstream
   behaviour by accident.
 
-### Principle 4: All SCI additions live under `sci/`, zero pollution of Base directories
+### Principle 5: All SCI additions live under `sci/`, zero pollution of Base directories
 
 **Why**:
 - Consistent with Principle 1: gives reviewers a clear boundary.
-- A Base reviewer reading the diff sees only the 7 Base files plus
-  `sci/` — they are not drowned in 22,000 lines of new code.
-- For a Base upstream merge: as long as the 7 Base files have no
+- A Base reviewer reading the diff sees only the 8 Base files plus
+  `sci/` — they are not drowned in 27,000 lines of new code.
+- For a Base upstream merge: as long as the 8 Base files have no
   conflict, the entire PR merges cleanly.
 
 ---
 
 ## 8. Verification
 
-State of the branch as of commit `7ac6fa65e`:
+State of the branch as of commit `036e70d16`:
 
-- **Local unit tests**: 307 lib + 14 hook_e2e + 74 macro tests all pass.
-- **Remote `cargo check` / `cargo test`**: pass (see local devnet test
-  report under `sci/docs/analysis/`).
-- **devnet hot-swap**: `base-client` and `base-builder` run the `:sci`
-  image; zero panics observed.
-- **devnet functional tests T1–T6**: all pass.
+- **Local unit tests**: 319 lib (1 ignored — the documented is_tip20
+  divergence test) + 14 hook_e2e + 7 revm-shim + ~74 macro tests all pass.
+- **Workspace `cargo check`**:
+  ```
+  cargo check -p sci-revm-shim -p sci-precompiles -p sci-precompiles-macros \
+              -p sci-precompile-abi -p tempo-chainspec-shim -p base-common-evm
+  ```
+  Clean.
+- **Devnet** (`ubuntu@54.255.70.252`, deployed 2026-05-26):
+  - Containers running `base-reth-node:sci` and `base-builder:sci` (no panics).
+  - Genesis patched with SCI allocs; `rollup.json` / `rollup-conductor.json`
+    `genesis.l2.hash` synced to the post-alloc value (re-computed on each
+    redeploy — the v0.8-era hash no longer applies).
+- **Devnet functional tests — all PASS**:
+  - **T1** chain ID 42001, blocks producing
+  - **T2** keychain + sci-agent-state precompiles reachable
+  - **T3** 1 wei transfer ACC1 → ACC0 succeeds (delta=1 wei)
+  - **T4** `authorizeKey` → `KeyAuthorized` event + `getKey` returns correct
+    `KeyInfo` (5-field struct: `(uint8 signatureType, address keyId,
+    uint64 expiry, bool enforceLimits, bool isRevoked)`)
+  - **T5** `SciAgentState.tripKey` from non-CB caller reverts with
+    `0x82b42900` (`Unauthorized`)
+  - **T-W1** `authorizeKey_2(witness)` → `KeyAuthorizationWitness` event,
+    `isKeyAuthorizationWitnessBurned` still false (T5 witness API)
+  - **T-W2** `burnKeyAuthorizationWitness` → `KeyAuthorizationWitnessBurned`
+    event
+  - **T-W3** `isKeyAuthorizationWitnessBurned` returns `true` after burn
 - **CI / lint**: not exercised on this branch (CI configuration is out of
   scope here).
 
@@ -438,16 +589,22 @@ State of the branch as of commit `7ac6fa65e`:
 - **MPP Gateway**: `sci/gateway/` is a placeholder; out of scope for P0-1.
 - **SCI mainnet chainspec**: only a devnet template exists. The mainnet
   chainspec is a P1 task.
+- **`etc/docker/devnet-env` reconciliation**: the in-repo file still reads
+  `L2_CHAIN_ID=84538453`; the remote devnet uses 42001 as a working-tree
+  patch. CLAUDE.md documents this discrepancy as a follow-up.
+- **CLAUDE.md "7 Base files" list reconciliation**: the actual count is 8
+  (api/exec.rs trait-bounds patch is implicit but undocumented).
 
 ---
 
 ## 10. One-Sentence Summary
 
-`feat/p0-1-keychain` delivers the P0-1 keychain precompile end-to-end with
-**6 modified Base files + 1 new Base file** plus **~22,000 lines under
-`sci/`**. The Base footprint is confined to the EVM-factory / handler
-assembly path, making upstream merges friction-free; the SCI business code
-is roughly 80% verbatim from Tempo, kept tractable by Cargo `package`
-renames; and the devnet integration uncovered three non-trivial blockers
-(`dev`-profile reth panic, EIP-161 alloc gap, `rollup.json` hash drift),
-all of which now have solutions checked into `sci/devnet/`.
+`feat/p0-1-keychain-tempo-v1.7.1` delivers the P0-1 keychain precompile
+end-to-end on top of Base v0.9, ported verbatim from Tempo v1.7.1 (including
+the T5 witness API), with **7 modified Base files + 1 new Base file** plus
+**~27,000 lines under `sci/`**. The Base footprint is confined to the
+EVM-factory / handler-assembly path, making upstream merges friction-free;
+the SCI business code is roughly 80% verbatim from Tempo, kept tractable
+across the revm 34 ↔ 38 platform gap by the new `sci-revm-shim` compat crate
+plus the existing `tempo-chainspec-shim`; and devnet integration is verified
+end-to-end with T1–T5 + T-W1–T-W3 all passing on the 2026-05-26 deployment.
