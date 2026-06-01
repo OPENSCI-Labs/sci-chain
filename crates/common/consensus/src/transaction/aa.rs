@@ -13,7 +13,7 @@ use alloc::vec::Vec;
 use core::mem;
 
 use alloy_consensus::{
-    InMemorySize, SignableTransaction, Transaction, Typed2718,
+    InMemorySize, SignableTransaction, Transaction, TxEip1559, Typed2718,
     transaction::{RlpEcdsaDecodableTx, RlpEcdsaEncodableTx},
 };
 use alloy_eips::eip2930::AccessList;
@@ -80,6 +80,29 @@ impl BaseAaTransaction {
         mem::size_of::<Self>()
             + self.calls.iter().map(Call::size).sum::<usize>()
             + self.access_list.size()
+    }
+
+    /// PoC helper: approximate this AA transaction as an EIP-1559 transaction that
+    /// executes only its first call. Used to reuse the existing `TxEnv` /
+    /// `TransactionRequest` conversions until the Tempo batch handler lands (Phase 2).
+    /// Drops `fee_payer` and any calls beyond the first — single-call execution only.
+    pub fn to_eip1559_first_call(&self) -> TxEip1559 {
+        let (to, value, input) = self
+            .calls
+            .first()
+            .map(|c| (c.to, c.value, c.input.clone()))
+            .unwrap_or((TxKind::Create, U256::ZERO, Bytes::new()));
+        TxEip1559 {
+            chain_id: self.chain_id,
+            nonce: self.nonce,
+            gas_limit: self.gas_limit,
+            max_fee_per_gas: self.max_fee_per_gas,
+            max_priority_fee_per_gas: self.max_priority_fee_per_gas,
+            to,
+            value,
+            access_list: self.access_list.clone(),
+            input,
+        }
     }
 
     /// RLP length of the `fee_payer` field (`Some(addr)` encodes the address, `None`
@@ -329,5 +352,31 @@ mod tests {
     fn ty_is_0x76() {
         assert_eq!(BaseAaTransaction::tx_type(), 0x76);
         assert_eq!(Typed2718::ty(&sample()), 0x76);
+    }
+
+    /// The gate-relevant property: an AA tx wrapped in [`BaseTxEnvelope`] survives a
+    /// full EIP-2718 encode -> decode round-trip (this is the exact path the proof
+    /// client uses via `BaseTxEnvelope::decode_2718`).
+    #[test]
+    fn envelope_2718_roundtrip_aa() {
+        use alloy_consensus::Signed;
+        use alloy_eips::eip2718::{Decodable2718, Encodable2718};
+
+        use crate::{BaseTxEnvelope, OpTxType};
+
+        let tx = sample();
+        let sig = Signature::new(U256::from(1u64), U256::from(2u64), false);
+        let envelope = BaseTxEnvelope::Aa(Signed::new_unhashed(tx.clone(), sig));
+
+        let mut buf = Vec::new();
+        envelope.encode_2718(&mut buf);
+        assert_eq!(buf[0], super::SCI_AA_TX_TYPE_ID, "type byte must be 0x76");
+
+        let decoded = BaseTxEnvelope::decode_2718(&mut buf.as_slice()).unwrap();
+        assert_eq!(decoded.tx_type(), OpTxType::Aa);
+        match decoded {
+            BaseTxEnvelope::Aa(signed) => assert_eq!(signed.tx(), &tx),
+            other => panic!("expected Aa variant, got {other:?}"),
+        }
     }
 }

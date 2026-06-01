@@ -24,7 +24,7 @@ use reth_ethereum_primitives as _;
 
 use crate::{
     BaseBlock, BasePooledTransaction, BaseReceipt, BaseTxEnvelope, BaseTypedTransaction,
-    DEPOSIT_TX_TYPE_ID, DepositReceipt, OpTxType, TxDeposit,
+    DEPOSIT_TX_TYPE_ID, DepositReceipt, OpTxType, SCI_AA_TX_TYPE_ID, TxDeposit,
 };
 
 // ---------------------------------------------------------------------------
@@ -73,6 +73,7 @@ impl reth_primitives_traits::InMemorySize for BaseTypedTransaction {
             Self::Eip1559(tx) => tx.size(),
             Self::Eip7702(tx) => tx.size(),
             Self::Deposit(tx) => tx.size(),
+            Self::Aa(tx) => tx.size(),
         }
     }
 }
@@ -96,6 +97,7 @@ impl reth_primitives_traits::InMemorySize for BaseTxEnvelope {
             Self::Eip1559(tx) => tx.size(),
             Self::Eip7702(tx) => tx.size(),
             Self::Deposit(tx) => tx.size(),
+            Self::Aa(tx) => tx.tx().size() + core::mem::size_of::<Signature>(),
         }
     }
 }
@@ -223,6 +225,10 @@ impl Compact for OpTxType {
                 buf.put_u8(EIP7702_TX_TYPE_ID);
                 COMPACT_EXTENDED_IDENTIFIER_FLAG
             }
+            Self::Aa => {
+                buf.put_u8(SCI_AA_TX_TYPE_ID);
+                COMPACT_EXTENDED_IDENTIFIER_FLAG
+            }
             Self::Deposit => {
                 buf.put_u8(DEPOSIT_TX_TYPE_ID);
                 COMPACT_EXTENDED_IDENTIFIER_FLAG
@@ -266,6 +272,7 @@ impl Compact for BaseTypedTransaction {
             Self::Eip2930(tx) => tx.to_compact(out),
             Self::Eip1559(tx) => tx.to_compact(out),
             Self::Eip7702(tx) => tx.to_compact(out),
+            Self::Aa(_) => unimplemented!("AA reth Compact codec deferred to Phase 1"),
             Self::Deposit(tx) => tx.to_compact(out),
         };
         identifier
@@ -290,6 +297,7 @@ impl Compact for BaseTypedTransaction {
                 let (tx, buf) = Compact::from_compact(buf, buf.len());
                 (Self::Eip7702(tx), buf)
             }
+            OpTxType::Aa => unimplemented!("AA reth Compact codec deferred to Phase 1"),
             OpTxType::Deposit => {
                 let (tx, buf) = Compact::from_compact(buf, buf.len());
                 (Self::Deposit(tx), buf)
@@ -309,6 +317,7 @@ impl reth_codecs::alloy::transaction::ToTxCompact for BaseTxEnvelope {
             Self::Eip2930(tx) => tx.tx().to_compact(buf),
             Self::Eip1559(tx) => tx.tx().to_compact(buf),
             Self::Eip7702(tx) => tx.tx().to_compact(buf),
+            Self::Aa(_) => unimplemented!("AA reth Compact codec deferred to Phase 1"),
             Self::Deposit(tx) => tx.to_compact(buf),
         };
     }
@@ -339,6 +348,7 @@ impl reth_codecs::alloy::transaction::FromTxCompact for BaseTxEnvelope {
                 let tx = Signed::new_unhashed(tx, signature);
                 (Self::Eip7702(tx), buf)
             }
+            OpTxType::Aa => unimplemented!("AA reth Compact codec deferred to Phase 1"),
             OpTxType::Deposit => {
                 let (tx, buf) = TxDeposit::from_compact(buf, buf.len());
                 let tx = Sealed::new(tx);
@@ -362,6 +372,7 @@ impl reth_codecs::alloy::transaction::Envelope for BaseTxEnvelope {
             Self::Eip2930(tx) => tx.signature(),
             Self::Eip1559(tx) => tx.signature(),
             Self::Eip7702(tx) => tx.signature(),
+            Self::Aa(tx) => tx.signature(),
             Self::Deposit(_) => &DEPOSIT_SIGNATURE,
         }
     }
@@ -448,6 +459,7 @@ impl From<CompactBaseReceipt<'_>> for BaseReceipt {
             OpTxType::Eip2930 => Self::Eip2930(inner),
             OpTxType::Eip1559 => Self::Eip1559(inner),
             OpTxType::Eip7702 => Self::Eip7702(inner),
+            OpTxType::Aa => Self::Eip1559(inner),
             OpTxType::Deposit => {
                 Self::Deposit(DepositReceipt { inner, deposit_nonce, deposit_receipt_version })
             }
