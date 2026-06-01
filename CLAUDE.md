@@ -647,6 +647,38 @@ cast call 0xAAAAAAAA00000000000000000000000000000000 \
   --rpc-url http://localhost:8545
 ```
 
+### EIP-7702 self-auth nonce trap (cast)
+
+When the authorizer of a 7702 authorization is also the **sender** of the type-4 tx
+(i.e. an EOA delegating its own account to a contract — the common path for the SCI
+agent-tx loop, where the root account 7702-delegates to `SCIAgentDelegator`),
+`cast wallet sign-auth` defaults to the **current** account nonce, but EIP-7702
+processes authorization entries **after** the tx's nonce increment. The auth's
+`nonce` field must equal the account nonce *after* the tx increments it — i.e.
+`current_nonce + 1`. If you omit `--nonce` the tx still ships as type-4, gets
+`status=1`, burns ~46k gas (the auth-list verification cost), but the delegation is
+**silently discarded**: `cast code <authorizer>` stays `0x`.
+
+```bash
+ALICE_PK=0xac0974...
+DELEGATOR=0xCCCCCCCC00000000000000000000000000000001
+
+NEXT_NONCE=$(( $(cast nonce $ALICE --rpc-url $L2_RPC) + 1 ))
+
+ALICE_AUTH=$(cast wallet sign-auth $DELEGATOR \
+  --private-key $ALICE_PK --rpc-url $L2_RPC \
+  --nonce $NEXT_NONCE)                            # ← critical
+
+cast send $ALICE --value 0 --auth "$ALICE_AUTH" \
+  --rpc-url $L2_RPC --private-key $ALICE_PK
+# Expected: cast code $ALICE → 0xef0100<delegator-address-20-bytes>
+```
+
+Cross-authorization (someone else signs the auth, you submit the tx as a different
+EOA) does NOT need this adjustment — there, `cast wallet sign-auth` with the
+authorizer's RPC-derived nonce is already correct because the authorizer's nonce
+isn't incremented by the tx. The trap is specific to self-auth.
+
 ## What NOT to do
 
 - Do not run `cargo fmt` on Base original files (creates massive diffs)

@@ -18,3 +18,6 @@ crates/proof/succinct/elf/*.bin
 # SCI working-notes / dev-period analysis docs — never committed.
 # See CLAUDE.md Critical Rule #7 (English-only docs policy).
 sci/docs/analysis/
+
+# SCI manual / hands-on test walkthroughs — local verification only, never committed.
+sci/docs/test/
