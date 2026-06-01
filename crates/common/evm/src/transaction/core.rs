@@ -242,6 +242,13 @@ impl FromTxWithEncoded<BaseTxEnvelope> for BaseTransaction<TxEnv> {
                 enveloped_tx: Some(encoded),
                 deposit: Default::default(),
             },
+            // PoC: execute the AA tx's first call as an EIP-1559 tx. Real batch
+            // execution + fee_payer charging is the Tempo handler's job (Phase 2).
+            BaseTxEnvelope::Aa(tx) => Self {
+                base: TxEnv::from_recovered_tx(&tx.tx().to_eip1559_first_call(), caller),
+                enveloped_tx: Some(encoded),
+                deposit: Default::default(),
+            },
             BaseTxEnvelope::Deposit(tx) => Self::from_encoded_tx(tx.inner(), caller, encoded),
         }
     }

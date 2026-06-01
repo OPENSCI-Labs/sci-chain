@@ -380,3 +380,61 @@ mod tests {
         }
     }
 }
+
+/// Milestone C: the execution-conversion path the proof executor relies on.
+///
+/// The proof client / executor are generic over `F::Tx: FromRecoveredTx<BaseTxEnvelope>`
+/// (see `crates/proof/client/{driver,prologue}.rs`). This test exercises exactly that
+/// conversion for the new AA variant and asserts the produced [`TxEnv`] matches the
+/// AA tx's first call (the PoC single-call execution semantics), proving the proof
+/// executor will build the correct EVM environment for an AA transaction.
+#[cfg(all(test, feature = "evm"))]
+mod evm_tests {
+    use alloy_consensus::Signed;
+    use alloy_evm::FromRecoveredTx;
+    use alloy_primitives::{Signature, address};
+    use revm::context::TxEnv;
+
+    use super::{BaseAaTransaction, Bytes, Call, TxKind, U256};
+    use crate::BaseTxEnvelope;
+
+    #[test]
+    fn aa_txenv_matches_first_call_eip1559() {
+        let caller = address!("0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266");
+        let recipient = address!("0x70997970C51812dc3A010C7d01b50e0d17dc79C8");
+        let aa = BaseAaTransaction {
+            chain_id: 42001,
+            nonce: 5,
+            max_priority_fee_per_gas: 1,
+            max_fee_per_gas: 100,
+            gas_limit: 50_000,
+            calls: alloc::vec![Call {
+                to: TxKind::Call(recipient),
+                value: U256::from(777u64),
+                input: Bytes::from_static(&[0xaa, 0xbb]),
+            }],
+            access_list: Default::default(),
+            fee_payer: None,
+        };
+        let sig = Signature::new(U256::from(1u64), U256::from(2u64), false);
+
+        // The conversion the proof executor uses: FromRecoveredTx<BaseTxEnvelope>.
+        let aa_env = BaseTxEnvelope::Aa(Signed::new_unhashed(aa.clone(), sig));
+        let tx_env_aa = TxEnv::from_recovered_tx(&aa_env, caller);
+
+        // The equivalent EIP-1559 envelope built from the AA tx's first call.
+        let eip_env =
+            BaseTxEnvelope::Eip1559(Signed::new_unhashed(aa.to_eip1559_first_call(), sig));
+        let tx_env_eip = TxEnv::from_recovered_tx(&eip_env, caller);
+
+        assert_eq!(tx_env_aa, tx_env_eip, "AA TxEnv must equal the first-call EIP-1559 TxEnv");
+
+        // And it reflects the AA tx's first call + top-level fields.
+        assert_eq!(tx_env_aa.caller, caller);
+        assert_eq!(tx_env_aa.kind, TxKind::Call(recipient));
+        assert_eq!(tx_env_aa.value, U256::from(777u64));
+        assert_eq!(tx_env_aa.data, Bytes::from_static(&[0xaa, 0xbb]));
+        assert_eq!(tx_env_aa.nonce, 5);
+        assert_eq!(tx_env_aa.chain_id, Some(42001));
+    }
+}
