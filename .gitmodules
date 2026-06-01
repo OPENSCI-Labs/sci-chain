@@ -1,0 +1,9 @@
+[submodule "sci/contracts/lib/forge-std"]
+	path = sci/contracts/lib/forge-std
+	url = https://github.com/foundry-rs/forge-std
+[submodule "sci/contracts/lib/solady"]
+	path = sci/contracts/lib/solady
+	url = https://github.com/Vectorized/solady
+[submodule "sci/contracts/lib/openzeppelin-contracts"]
+	path = sci/contracts/lib/openzeppelin-contracts
+	url = https://github.com/OpenZeppelin/openzeppelin-contracts
