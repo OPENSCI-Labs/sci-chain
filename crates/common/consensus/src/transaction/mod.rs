@@ -12,6 +12,9 @@ pub use envelope::{BaseTransaction, BaseTxEnvelope, OpTxType};
 mod typed;
 pub use typed::BaseTypedTransaction;
 
+mod aa;
+pub use aa::{BaseAaTransaction, Call, SCI_AA_TX_TYPE_ID};
+
 mod pooled;
 #[cfg(feature = "serde")]
 pub use deposit::serde_deposit_tx_rpc;
