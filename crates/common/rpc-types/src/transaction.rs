@@ -352,4 +352,20 @@ mod tests {
         let expected = serde_json::from_str::<serde_json::Value>(rpc_tx).unwrap();
         similar_asserts::assert_eq!(deserialized, expected);
     }
+
+    #[test]
+    fn can_deserialize_aa() {
+        // The exact JSON the L2 node emits for an SCI AA tx (type 0x76), captured from a
+        // batcher block fetch. Deserializing it into `Transaction` is what the batcher does;
+        // it must round-trip (regression for the batcher block-deserialization bug).
+        let rpc_tx = r#"{"type":"0x76","chainId":"0xa411","nonce":"0x0","maxPriorityFeePerGas":"0xf4240","maxFeePerGas":"0x3b9aca00","gasLimit":"0x30d40","calls":[{"to":"0x3333333333333333333333333333333333333333","value":"0x5","input":"0x"}],"accessList":[],"feePayer":"0x70997970c51812dc3a010c7d01b50e0d17dc79c8","root":"0x70997970c51812dc3a010c7d01b50e0d17dc79c8","r":"0x73849af2ba501bf4dff649df298a2b6c1725de395f47403f84a3fee859e8301a","s":"0x167b3c435207181b425d5fad2c3841885a14ba15af8ae7a4a905b8e67e5d6934","yParity":"0x0","v":"0x0","hash":"0xcf3dfb0df12449a4b96c06eb1a22156e113d36cb0143bdcbe48d5bc732670780","blockHash":"0xfe753f935e1d859c1c84d33757c1620d9ce0d1ae28f5a91aa47e82cc66901593","blockNumber":"0x29","transactionIndex":"0x1","from":"0x3c44cdddb6a900fa2b585dd299e03d12fa4293bc","gasPrice":"0x3b9aca00"}"#;
+
+        let tx = serde_json::from_str::<Transaction>(rpc_tx).expect("AA tx must deserialize");
+        assert_eq!(tx.inner.ty(), 0x76);
+
+        // Re-serialize and compare to the original JSON (full round-trip).
+        let reser = serde_json::to_value(&tx).unwrap();
+        let expected = serde_json::from_str::<serde_json::Value>(rpc_tx).unwrap();
+        similar_asserts::assert_eq!(reser, expected);
+    }
 }

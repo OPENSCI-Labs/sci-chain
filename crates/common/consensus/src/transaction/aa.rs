@@ -51,14 +51,19 @@ impl Call {
 #[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub struct BaseAaTransaction {
     /// Chain ID.
+    #[cfg_attr(feature = "serde", serde(with = "alloy_serde::quantity"))]
     pub chain_id: ChainId,
     /// Sender nonce.
+    #[cfg_attr(feature = "serde", serde(with = "alloy_serde::quantity"))]
     pub nonce: u64,
     /// EIP-1559 max priority fee per gas.
+    #[cfg_attr(feature = "serde", serde(with = "alloy_serde::quantity"))]
     pub max_priority_fee_per_gas: u128,
     /// EIP-1559 max fee per gas.
+    #[cfg_attr(feature = "serde", serde(with = "alloy_serde::quantity"))]
     pub max_fee_per_gas: u128,
     /// Gas limit.
+    #[cfg_attr(feature = "serde", serde(with = "alloy_serde::quantity"))]
     pub gas_limit: u64,
     /// Batch of calls executed atomically.
     pub calls: Vec<Call>,
