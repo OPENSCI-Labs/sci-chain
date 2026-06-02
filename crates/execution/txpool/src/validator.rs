@@ -201,22 +201,21 @@ where
             );
         }
 
-        // Plan A Phase 1: SCI AA transactions (type 0x76) are local-only. Reject any that
-        // arrive over the p2p network — they may only enter the pool via local RPC ingress.
+        // Plan A Phase 1: SCI AA transactions (type 0x76) are local-only in the sense that
+        // they are never gossiped to peers (`propagate = false` below). We do NOT reject by
+        // transaction origin: a sequencer running `--txpool.nolocals` tags every
+        // RPC-submitted tx as `External`, so an origin-based reject would block legitimate
+        // RPC ingress on exactly the node that must build AA blocks. Non-propagation is the
+        // real "local-only" guarantee; admitting an AA tx from any origin is safe because it
+        // still passes the keychain pre-execution hook at execution time.
         let is_aa = transaction.ty() == base_common_consensus::SCI_AA_TX_TYPE_ID;
-        if is_aa && !origin.is_local() {
-            return TransactionValidationOutcome::Invalid(
-                transaction,
-                InvalidTransactionError::TxTypeNotSupported.into(),
-            );
-        }
 
         let outcome = self.inner.validate_one_with_state(origin, transaction, state);
 
         let mut outcome = self.apply_base_checks(outcome);
 
-        // Never propagate AA txs to peers, even when submitted locally: they have no alloy
-        // pooled-tx representation and SCI gossip of AA is intentionally disabled.
+        // Never propagate AA txs to peers (no alloy pooled-tx representation; SCI gossip of
+        // AA is intentionally disabled).
         if is_aa {
             if let TransactionValidationOutcome::Valid { propagate, .. } = &mut outcome {
                 *propagate = false;

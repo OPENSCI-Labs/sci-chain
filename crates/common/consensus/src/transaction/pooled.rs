@@ -37,10 +37,12 @@ pub enum BasePooledTransaction {
     Eip7702(Signed<TxEip7702>),
     /// A [`BaseAaTransaction`] (SCI account-abstraction tx) tagged with type 0x76.
     ///
-    /// Plan A Phase 1: AA txs are pooled **local-only** — they enter the pool via local
-    /// RPC ingress, are never gossiped to peers (the validator forces `propagate = false`
-    /// and rejects external-origin AA), and are never converted to an alloy `TxEnvelope` /
-    /// `PooledTransaction` (which have no AA representation).
+    /// Plan A Phase 1: AA txs are pooled **local-only** — they are never gossiped to peers
+    /// (the validator forces `propagate = false`) and never converted to an alloy
+    /// `TxEnvelope` / `PooledTransaction` (which have no AA representation). Admission is not
+    /// gated by transaction origin: a sequencer running `--txpool.nolocals` tags every
+    /// RPC-submitted tx as `External`, so an origin-based reject would block legitimate RPC
+    /// ingress. Non-propagation is the real "local-only" guarantee.
     #[envelope(ty = 118)]
     Aa(Signed<BaseAaTransaction>),
 }

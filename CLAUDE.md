@@ -138,8 +138,13 @@ sci-chain/
      (first-call EIP-1559 PoC approximation).
    - `crates/execution/evm/src/receipts.rs`,
      `crates/execution/flashblocks/src/receipt_builder.rs` — AA receipt arm (EIP-1559).
-   - `crates/execution/txpool/src/validator.rs` — AA local-only: reject external-origin
-     AA, force `propagate = false`.
+   - `crates/execution/txpool/src/validator.rs` — AA local-only: force `propagate = false`
+     (no gossip). Admission is NOT origin-gated — a `--txpool.nolocals` sequencer tags RPC
+     txs as `External`, so an origin reject would block legitimate RPC ingress (learned on
+     devnet 2026-06-02).
+   - `crates/execution/node/src/node.rs` — register AA tx type 0x76 via
+     `EthTransactionValidatorBuilder::with_custom_tx_type` so reth's inner validator does
+     not reject it as `TxTypeNotSupported`.
 3. **Tempo code is reference only**. Source is at `/home/gavin/opensci/sci-dev/tempo/`
    (an earlier draft of this guide listed `~/sci-dev/Tempo-ref/` — that path does not exist
    on this machine). Copy and adapt, never import as a git dependency.
@@ -521,10 +526,15 @@ to alloy `TxEnvelope`/`PooledTransaction`).
 
 **Status (phase tracker `sci/docs/test/plan-a-status.md`):**
 - Phase 0 PoC — Go/No-Go gate passed: decode → execute → proof for a minimal AA tx.
-- Phase 1 (in progress) — full tx type: reth `Compact` + serde-bincode-compat codecs
-  (done, stubs removed); local-only mempool intake (done). Remaining = devnet runtime
-  verification (does reth's inner `EthTransactionValidator` accept 0x76; multi-call
-  intrinsic gas; payload selection).
+- Phase 1 — full tx type: reth `Compact` + serde-bincode-compat codecs (done, stubs
+  removed); local-only mempool intake (done); reth validator registration via
+  `with_custom_tx_type` (done). **Verified end-to-end on devnet 2026-06-02**: a signed
+  0x76 tx (built by `sci/tools/aa-txgen`) was accepted into the pool, included in a block
+  (status 1, gasUsed 21000), executed its first-call transfer, and was re-derived by the
+  verifier. **Deployment note: ALL THREE service images must be rebuilt for AA** —
+  `client` (EL) + `builder` (sequencer EL) + `consensus` (rollup node). The rollup node
+  decodes L2 block txs via `BaseTxEnvelope`; a stale consensus image crashes with
+  `Decode("unexpected tx type")` on the first AA block.
 - Phase 2 — handler: `fee_payer` + scope pre-check + atomic batch deduction (deduction
   must cover the `transferWithMemo` selector). Phase 3 — keychain + native sentinel limit.
 
