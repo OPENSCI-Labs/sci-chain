@@ -242,6 +242,7 @@ pub fn run_aa_keychain_hook<EVM, ERROR>(
     root: Address,
     session_key: Address,
     calls: &[AaCall],
+    gas_reservation: U256,
 ) -> Result<HookOutcome<ERROR>, ERROR>
 where
     EVM: EvmTr<Context: ContextTr<Db: AlloyDatabase, Journal: JournalTr<Database: AlloyDatabase> + Debug>>,
@@ -283,8 +284,44 @@ where
         kc.set_transaction_key(session_key)?;
         kc.set_tx_origin(session_key)?;
 
+        // Per-call scope + accumulate the spend per token for the pre-flight limit check
+        // (2c-ii). Native value (D2-B) and gas (D-gas) both meter against the `address(0)`
+        // sentinel; recognized ERC-20 transfers/approves meter against the token (D3-B).
+        let mut totals_per_token: HashMap<Address, U256> = HashMap::new();
         for call in calls {
             kc.validate_call_scope_for_transaction(root, session_key, &call.to, &call.input)?;
+            if !call.value.is_zero() {
+                let e = totals_per_token.entry(Address::ZERO).or_insert(U256::ZERO);
+                *e = e.saturating_add(call.value);
+            }
+            if let TxKind::Call(target) = call.to {
+                if let Some((token, amount)) = classify_token_call(target, &call.input) {
+                    let e = totals_per_token.entry(token).or_insert(U256::ZERO);
+                    *e = e.saturating_add(amount);
+                }
+            }
+        }
+        if !gas_reservation.is_zero() {
+            let e = totals_per_token.entry(Address::ZERO).or_insert(U256::ZERO);
+            *e = e.saturating_add(gas_reservation);
+        }
+
+        // Pre-flight (read-only): each token's batch total must fit the remaining quota,
+        // honoring `enforce_limits`. Real deductions are deferred to
+        // [`apply_aa_post_execution_deductions`] so a hook-passing, body-reverting tx costs
+        // no quota (strong-R1).
+        let key = kc.keys[root][session_key].read()?;
+        if key.enforce_limits {
+            let now = StorageCtx::default().timestamp().saturating_to::<u64>();
+            for (token, total) in &totals_per_token {
+                let remaining = kc.effective_remaining_limit(root, session_key, *token, now)?;
+                if *total > remaining {
+                    return Err(
+                        tempo_contracts::precompiles::AccountKeychainError::spending_limit_exceeded()
+                            .into(),
+                    );
+                }
+            }
         }
         Ok(())
     });
@@ -369,6 +406,52 @@ where
         Ok(())
     })
     .map_err(|e| ERROR::from_string(format!("apply deductions failed: {e:?}")))?;
+
+    Ok(())
+}
+
+/// Applies the deferred spending-limit deductions for an AA agent tx (Plan A 2c-ii).
+///
+/// Pairs with [`run_aa_keychain_hook`]'s read-only pre-flight: the `SciHandler` calls this
+/// from `execution_result` only when the batch executed successfully, so a hook-passing,
+/// body-reverting tx costs no quota (strong-R1). The caller passes the already-decoded
+/// `calls` and `gas_deduction` (the gas spend metered against the agent, in the sentinel
+/// token's units; zero when the signer — not `root` — paid gas). Native value and gas both
+/// deduct from the `address(0)` sentinel; recognized ERC-20 calls deduct per-token.
+pub fn apply_aa_post_execution_deductions<EVM, ERROR>(
+    evm: &mut EVM,
+    root: Address,
+    session_key: Address,
+    calls: &[AaCall],
+    gas_deduction: U256,
+) -> Result<(), ERROR>
+where
+    EVM: EvmTr<Context: ContextTr<Db: AlloyDatabase, Journal: JournalTr<Database: AlloyDatabase> + Debug>>,
+    ERROR: From<<<EVM::Context as ContextTr>::Db as Database>::Error> + FromStringError,
+{
+    enter_keychain_storage(evm.ctx(), || -> crate::error::Result<()> {
+        let mut kc = AccountKeychain::default();
+
+        // Native value (D2-B) + gas (D-gas) → address(0) sentinel.
+        let mut sentinel_total = gas_deduction;
+        for call in calls {
+            sentinel_total = sentinel_total.saturating_add(call.value);
+        }
+        if !sentinel_total.is_zero() {
+            kc.verify_and_update_spending(root, session_key, Address::ZERO, sentinel_total)?;
+        }
+
+        // Recognized ERC-20 transfers/approves (D3-B, incl. transferWithMemo) → per-token.
+        for call in calls {
+            if let TxKind::Call(target) = call.to {
+                if let Some((token, amount)) = classify_token_call(target, &call.input) {
+                    kc.verify_and_update_spending(root, session_key, token, amount)?;
+                }
+            }
+        }
+        Ok(())
+    })
+    .map_err(|e| ERROR::from_string(format!("apply AA deductions failed: {e:?}")))?;
 
     Ok(())
 }

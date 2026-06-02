@@ -36,8 +36,8 @@ use revm::{
 };
 
 use sci_precompiles::{
-    AaCall, HookOutcome, apply_post_execution_deductions, run_aa_keychain_hook,
-    run_pre_execution_hook,
+    AaCall, HookOutcome, apply_aa_post_execution_deductions, apply_post_execution_deductions,
+    run_aa_keychain_hook, run_pre_execution_hook,
 };
 
 use crate::{
@@ -199,7 +199,18 @@ where
 
         match (root, aa_calls) {
             (Some(root_addr), Some(calls)) => {
-                match run_aa_keychain_hook::<EVM, ERROR>(evm, root_addr, signer, &calls)? {
+                // D-gas: when fee_payer (== root) sponsors gas, reserve the max gas spend
+                // (gas_limit * max_fee, pessimistic) against root's `address(0)` sentinel
+                // limit in the pre-flight; when the signer pays gas it isn't root's spend.
+                let gas_reservation = if raw_fee_payer == Some(root_addr) {
+                    let (_block, tx, _cfg, _journal, _chain, _local) = evm.ctx().all_mut();
+                    U256::from(tx.gas_limit()).saturating_mul(U256::from(tx.max_fee_per_gas()))
+                } else {
+                    U256::ZERO
+                };
+                match run_aa_keychain_hook::<EVM, ERROR>(
+                    evm, root_addr, signer, &calls, gas_reservation,
+                )? {
                     HookOutcome::Pass => Ok(()),
                     HookOutcome::Reject(err) => Err(err),
                 }
@@ -379,7 +390,41 @@ where
         // Deposit txs and non-agent txs short-circuit inside the helper (it reads the
         // keychain's transient `transaction_key` slot and returns immediately on zero).
         if frame_result.interpreter_result().result.is_ok() {
-            apply_post_execution_deductions::<EVM, ERROR>(evm)?;
+            // AA agent txs (root set) meter against the keychain via the AA-native path
+            // (native value + gas → address(0) sentinel; ERC-20 → per-token); every other
+            // tx (incl. AA without root) uses the legacy Plan B deduction, which no-ops when
+            // the keychain transient `transaction_key` slot is zero.
+            let root = evm.ctx().tx().aa_parts().and_then(|a| a.root);
+            if let Some(root_addr) = root {
+                let signer = evm.ctx().tx().caller();
+                let raw_fee_payer = evm.ctx().tx().aa_parts().and_then(|a| a.fee_payer);
+                let calls: Vec<AaCall> = evm
+                    .ctx()
+                    .tx()
+                    .aa_parts()
+                    .map(|parts| {
+                        parts
+                            .calls
+                            .iter()
+                            .map(|c| AaCall { to: c.to, value: c.value, input: c.input.to_vec() })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                // D-gas: the gas the agent actually spent (gas_used * max_fee, pessimistic,
+                // matching the pre-flight reservation), counted only when root sponsored gas.
+                let gas_deduction = if raw_fee_payer == Some(root_addr) {
+                    let gas_used = frame_result.gas().used();
+                    let max_fee = evm.ctx().tx().max_fee_per_gas();
+                    U256::from(gas_used).saturating_mul(U256::from(max_fee))
+                } else {
+                    U256::ZERO
+                };
+                apply_aa_post_execution_deductions::<EVM, ERROR>(
+                    evm, root_addr, signer, &calls, gas_deduction,
+                )?;
+            } else {
+                apply_post_execution_deductions::<EVM, ERROR>(evm)?;
+            }
         }
         self.inner.execution_result(evm, frame_result)
     }
