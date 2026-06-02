@@ -13,7 +13,10 @@ extern crate alloc;
 #[cfg(feature = "reth")]
 mod reth_compat;
 #[cfg(feature = "reth")]
-pub use reth_compat::{BaseBlockBody, BasePrimitives, CompactTxDeposit, DepositReceiptExt};
+pub use reth_compat::{
+    BaseBlockBody, BasePrimitives, CompactBaseAaTransaction, CompactCall, CompactTxDeposit,
+    DepositReceiptExt,
+};
 
 mod receipts;
 pub use receipts::{

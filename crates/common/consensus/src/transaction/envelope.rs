@@ -627,6 +627,8 @@ impl alloy_consensus::transaction::SignerRecoverable for BaseTxEnvelope {
 /// Bincode-compatible serde implementation for [`BaseTxEnvelope`].
 #[cfg(all(feature = "serde", feature = "serde-bincode-compat"))]
 pub(super) mod serde_bincode_compat {
+    use alloc::borrow::Cow;
+
     use alloy_consensus::{
         Sealed, Signed,
         transaction::serde_bincode_compat::{TxEip1559, TxEip2930, TxEip7702, TxLegacy},
@@ -635,7 +637,7 @@ pub(super) mod serde_bincode_compat {
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
     use serde_with::{DeserializeAs, SerializeAs};
 
-    use crate::serde_bincode_compat::TxDeposit;
+    use crate::{BaseAaTransaction, serde_bincode_compat::TxDeposit};
 
     /// Bincode-compatible representation of an [`BaseTxEnvelope`].
     #[derive(Debug, Serialize, Deserialize)]
@@ -675,6 +677,16 @@ pub(super) mod serde_bincode_compat {
             /// Borrowed deposit transaction data.
             transaction: TxDeposit<'a>,
         },
+        /// SCI account-abstraction variant.
+        ///
+        /// The AA tx has no alloy zero-copy borrowed repr, so it rides a
+        /// [`Cow`]: borrowed on serialize, owned on deserialize.
+        Aa {
+            /// Transaction signature.
+            signature: Signature,
+            /// AA transaction data (borrowed on serialize, owned on deserialize).
+            transaction: Cow<'a, BaseAaTransaction>,
+        },
     }
 
     impl<'a> From<&'a super::BaseTxEnvelope> for BaseTxEnvelope<'a> {
@@ -700,11 +712,10 @@ pub(super) mod serde_bincode_compat {
                     hash: sealed_deposit.seal(),
                     transaction: sealed_deposit.inner().into(),
                 },
-                // AA bincode-compat (reth DB storage repr) is deferred to Phase 1; the
-                // PoC gate path (decode_2718 / execution / proof) does not use it.
-                super::BaseTxEnvelope::Aa(_) => {
-                    unimplemented!("AA bincode-compat repr deferred to Phase 1")
-                }
+                super::BaseTxEnvelope::Aa(signed_aa) => Self::Aa {
+                    signature: *signed_aa.signature(),
+                    transaction: Cow::Borrowed(signed_aa.tx()),
+                },
             }
         }
     }
@@ -726,6 +737,9 @@ pub(super) mod serde_bincode_compat {
                 }
                 BaseTxEnvelope::Deposit { hash, transaction } => {
                     Self::Deposit(Sealed::new_unchecked(transaction.into(), hash))
+                }
+                BaseTxEnvelope::Aa { signature, transaction } => {
+                    Self::Aa(Signed::new_unhashed(transaction.into_owned(), signature))
                 }
             }
         }
@@ -778,6 +792,45 @@ pub(super) mod serde_bincode_compat {
                     &mut arbitrary::Unstructured::new(&bytes),
                 )
                 .unwrap(),
+            };
+
+            let encoded = bincode::serde::encode_to_vec(&data, bincode::config::legacy()).unwrap();
+            let (decoded, _) =
+                bincode::serde::decode_from_slice::<Data, _>(&encoded, bincode::config::legacy())
+                    .unwrap();
+            assert_eq!(decoded, data);
+        }
+
+        /// Deterministic bincode round-trip for the AA envelope variant (the arbitrary
+        /// test above only exercises one random variant per run).
+        #[test]
+        fn test_aa_envelope_bincode_roundtrip() {
+            use alloy_primitives::{Signature, TxKind, U256, address};
+
+            #[serde_as]
+            #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+            struct Data {
+                #[serde_as(as = "BaseTxEnvelope<'_>")]
+                envelope: super::super::BaseTxEnvelope,
+            }
+
+            let aa = crate::BaseAaTransaction {
+                chain_id: 42001,
+                nonce: 9,
+                max_priority_fee_per_gas: 1,
+                max_fee_per_gas: 100,
+                gas_limit: 50_000,
+                calls: alloc::vec![crate::Call {
+                    to: TxKind::Call(address!("0x70997970C51812dc3A010C7d01b50e0d17dc79C8")),
+                    value: U256::from(777u64),
+                    input: alloy_primitives::Bytes::from_static(&[0xaa, 0xbb]),
+                }],
+                access_list: Default::default(),
+                fee_payer: Some(address!("0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266")),
+            };
+            let sig = Signature::new(U256::from(1u64), U256::from(2u64), false);
+            let data = Data {
+                envelope: super::super::BaseTxEnvelope::Aa(Signed::new_unhashed(aa, sig)),
             };
 
             let encoded = bincode::serde::encode_to_vec(&data, bincode::config::legacy()).unwrap();

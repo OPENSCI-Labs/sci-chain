@@ -11,7 +11,8 @@ use alloy_consensus::{
     Header, Receipt, Sealed, Signed, TxEip1559, TxEip2930, TxEip7702, TxLegacy, TxReceipt,
     constants::EIP7702_TX_TYPE_ID,
 };
-use alloy_primitives::{Address, B256, Bytes, Signature, TxKind, U256};
+use alloy_eips::eip2930::AccessList;
+use alloy_primitives::{Address, B256, Bytes, ChainId, Signature, TxKind, U256};
 use bytes::{Buf, BufMut};
 use reth_codecs::{
     Compact, CompactZstd,
@@ -23,8 +24,9 @@ use reth_codecs::{
 use reth_ethereum_primitives as _;
 
 use crate::{
-    BaseBlock, BasePooledTransaction, BaseReceipt, BaseTxEnvelope, BaseTypedTransaction,
-    DEPOSIT_TX_TYPE_ID, DepositReceipt, OpTxType, SCI_AA_TX_TYPE_ID, TxDeposit,
+    BaseAaTransaction, BaseBlock, BasePooledTransaction, BaseReceipt, BaseTxEnvelope,
+    BaseTypedTransaction, Call, DEPOSIT_TX_TYPE_ID, DepositReceipt, OpTxType, SCI_AA_TX_TYPE_ID,
+    TxDeposit,
 };
 
 // ---------------------------------------------------------------------------
@@ -246,6 +248,7 @@ impl Compact for OpTxType {
                     let extended_identifier = buf.get_u8();
                     match extended_identifier {
                         EIP7702_TX_TYPE_ID => Self::Eip7702,
+                        SCI_AA_TX_TYPE_ID => Self::Aa,
                         DEPOSIT_TX_TYPE_ID => Self::Deposit,
                         _ => panic!("Unsupported OpTxType identifier: {extended_identifier}"),
                     }
@@ -254,6 +257,99 @@ impl Compact for OpTxType {
             },
             buf,
         )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Compact – Call / BaseAaTransaction (SCI AA tx)
+// ---------------------------------------------------------------------------
+
+/// Helper struct for deriving `Compact` on an AA inner [`Call`].
+///
+/// 1:1 with [`Call`]; exists only so the `Compact` derive manages the bitflag,
+/// mirroring the [`CompactTxDeposit`] pattern.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default, Compact)]
+#[reth_codecs(crate = "reth_codecs")]
+pub struct CompactCall {
+    /// Call target (or CREATE).
+    pub to: TxKind,
+    /// Wei value forwarded to the call.
+    pub value: U256,
+    /// Calldata forwarded to the call.
+    pub input: Bytes,
+}
+
+impl Compact for Call {
+    fn to_compact<B>(&self, buf: &mut B) -> usize
+    where
+        B: BufMut + AsMut<[u8]>,
+    {
+        let call = CompactCall { to: self.to, value: self.value, input: self.input.clone() };
+        call.to_compact(buf)
+    }
+
+    fn from_compact(buf: &[u8], len: usize) -> (Self, &[u8]) {
+        let (call, remaining) = CompactCall::from_compact(buf, len);
+        (Self { to: call.to, value: call.value, input: call.input }, remaining)
+    }
+}
+
+/// Helper struct for deriving `Compact` on [`BaseAaTransaction`].
+///
+/// 1:1 with [`BaseAaTransaction`]. The `calls` vec rides the generic
+/// `Vec<T: Compact>` impl via the per-element [`Call`] codec above.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default, Compact)]
+#[reth_codecs(crate = "reth_codecs")]
+pub struct CompactBaseAaTransaction {
+    /// Chain ID.
+    pub chain_id: ChainId,
+    /// Sender nonce.
+    pub nonce: u64,
+    /// EIP-1559 max priority fee per gas.
+    pub max_priority_fee_per_gas: u128,
+    /// EIP-1559 max fee per gas.
+    pub max_fee_per_gas: u128,
+    /// Gas limit.
+    pub gas_limit: u64,
+    /// Batch of calls executed atomically.
+    pub calls: Vec<Call>,
+    /// EIP-2930 access list.
+    pub access_list: AccessList,
+    /// Optional fee payer (sponsored gas).
+    pub fee_payer: Option<Address>,
+}
+
+impl Compact for BaseAaTransaction {
+    fn to_compact<B>(&self, buf: &mut B) -> usize
+    where
+        B: BufMut + AsMut<[u8]>,
+    {
+        let tx = CompactBaseAaTransaction {
+            chain_id: self.chain_id,
+            nonce: self.nonce,
+            max_priority_fee_per_gas: self.max_priority_fee_per_gas,
+            max_fee_per_gas: self.max_fee_per_gas,
+            gas_limit: self.gas_limit,
+            calls: self.calls.clone(),
+            access_list: self.access_list.clone(),
+            fee_payer: self.fee_payer,
+        };
+        tx.to_compact(buf)
+    }
+
+    fn from_compact(buf: &[u8], len: usize) -> (Self, &[u8]) {
+        let (tx, remaining) = CompactBaseAaTransaction::from_compact(buf, len);
+        let alloy_tx = Self {
+            chain_id: tx.chain_id,
+            nonce: tx.nonce,
+            max_priority_fee_per_gas: tx.max_priority_fee_per_gas,
+            max_fee_per_gas: tx.max_fee_per_gas,
+            gas_limit: tx.gas_limit,
+            calls: tx.calls,
+            access_list: tx.access_list,
+            fee_payer: tx.fee_payer,
+        };
+        (alloy_tx, remaining)
     }
 }
 
@@ -272,7 +368,7 @@ impl Compact for BaseTypedTransaction {
             Self::Eip2930(tx) => tx.to_compact(out),
             Self::Eip1559(tx) => tx.to_compact(out),
             Self::Eip7702(tx) => tx.to_compact(out),
-            Self::Aa(_) => unimplemented!("AA reth Compact codec deferred to Phase 1"),
+            Self::Aa(tx) => tx.to_compact(out),
             Self::Deposit(tx) => tx.to_compact(out),
         };
         identifier
@@ -297,7 +393,10 @@ impl Compact for BaseTypedTransaction {
                 let (tx, buf) = Compact::from_compact(buf, buf.len());
                 (Self::Eip7702(tx), buf)
             }
-            OpTxType::Aa => unimplemented!("AA reth Compact codec deferred to Phase 1"),
+            OpTxType::Aa => {
+                let (tx, buf) = Compact::from_compact(buf, buf.len());
+                (Self::Aa(tx), buf)
+            }
             OpTxType::Deposit => {
                 let (tx, buf) = Compact::from_compact(buf, buf.len());
                 (Self::Deposit(tx), buf)
@@ -317,7 +416,7 @@ impl reth_codecs::alloy::transaction::ToTxCompact for BaseTxEnvelope {
             Self::Eip2930(tx) => tx.tx().to_compact(buf),
             Self::Eip1559(tx) => tx.tx().to_compact(buf),
             Self::Eip7702(tx) => tx.tx().to_compact(buf),
-            Self::Aa(_) => unimplemented!("AA reth Compact codec deferred to Phase 1"),
+            Self::Aa(tx) => tx.tx().to_compact(buf),
             Self::Deposit(tx) => tx.to_compact(buf),
         };
     }
@@ -348,7 +447,11 @@ impl reth_codecs::alloy::transaction::FromTxCompact for BaseTxEnvelope {
                 let tx = Signed::new_unhashed(tx, signature);
                 (Self::Eip7702(tx), buf)
             }
-            OpTxType::Aa => unimplemented!("AA reth Compact codec deferred to Phase 1"),
+            OpTxType::Aa => {
+                let (tx, buf) = BaseAaTransaction::from_compact(buf, buf.len());
+                let tx = Signed::new_unhashed(tx, signature);
+                (Self::Aa(tx), buf)
+            }
             OpTxType::Deposit => {
                 let (tx, buf) = TxDeposit::from_compact(buf, buf.len());
                 let tx = Sealed::new(tx);
@@ -562,4 +665,75 @@ impl reth_primitives_traits::NodePrimitives for BasePrimitives {
     type BlockBody = BaseBlockBody;
     type SignedTx = BaseTxEnvelope;
     type Receipt = BaseReceipt;
+}
+
+#[cfg(test)]
+mod tests {
+    use alloy_consensus::Signed;
+    use alloy_primitives::{Signature, U256, address};
+
+    use super::*;
+
+    fn sample_aa() -> BaseAaTransaction {
+        BaseAaTransaction {
+            chain_id: 42001,
+            nonce: 7,
+            max_priority_fee_per_gas: 1_000_000_000,
+            max_fee_per_gas: 2_000_000_000,
+            gas_limit: 210_000,
+            calls: alloc::vec![
+                Call {
+                    to: TxKind::Call(address!("0x70997970C51812dc3A010C7d01b50e0d17dc79C8")),
+                    value: U256::from(1u64),
+                    input: Bytes::from_static(&[0xde, 0xad, 0xbe, 0xef]),
+                },
+                Call {
+                    to: TxKind::Create,
+                    value: U256::ZERO,
+                    input: Bytes::new(),
+                },
+            ],
+            access_list: Default::default(),
+            fee_payer: Some(address!("0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266")),
+        }
+    }
+
+    #[test]
+    fn aa_tx_compact_roundtrip() {
+        for fee_payer in [Some(Address::repeat_byte(0x42)), None] {
+            let tx = BaseAaTransaction { fee_payer, ..sample_aa() };
+            let mut buf = Vec::new();
+            let len = tx.to_compact(&mut buf);
+            let (decoded, remaining) = BaseAaTransaction::from_compact(&buf, len);
+            assert!(remaining.is_empty(), "compact buffer fully consumed");
+            assert_eq!(decoded, tx);
+        }
+    }
+
+    #[test]
+    fn aa_envelope_compact_roundtrip() {
+        let sig = Signature::new(U256::from(1u64), U256::from(2u64), false);
+        let envelope = BaseTxEnvelope::Aa(Signed::new_unhashed(sample_aa(), sig));
+
+        let mut buf = Vec::new();
+        let _ = Compact::to_compact(&envelope, &mut buf);
+        let (decoded, _) = <BaseTxEnvelope as Compact>::from_compact(&buf, buf.len());
+
+        match decoded {
+            BaseTxEnvelope::Aa(signed) => {
+                assert_eq!(signed.tx(), &sample_aa());
+                assert_eq!(*signed.signature(), sig);
+            }
+            other => panic!("expected Aa variant, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn aa_typed_compact_roundtrip() {
+        let tx = BaseTypedTransaction::Aa(sample_aa());
+        let mut buf = Vec::new();
+        let identifier = tx.to_compact(&mut buf);
+        let (decoded, _) = BaseTypedTransaction::from_compact(&buf, identifier);
+        assert_eq!(decoded, tx);
+    }
 }
