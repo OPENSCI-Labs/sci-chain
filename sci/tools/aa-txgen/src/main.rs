@@ -13,6 +13,7 @@
 //!   GAS_LIMIT    gas_limit                (default 100_000)
 //!   INPUT        first-call calldata hex  (default empty)
 //!   FEE_PAYER    fee_payer address        (default none)
+//!   ROOT         root account calls run as (default none = run as signer)
 //!   CALL2_TO     second call target       (adds a 2nd call to exercise batch)
 //!   CALL2_VALUE  second call value_wei    (default 0 when CALL2_TO set)
 
@@ -64,6 +65,10 @@ fn main() {
         .ok()
         .map(|a| Address::from_str(&a).expect("invalid FEE_PAYER"));
 
+    let root = env::var("ROOT")
+        .ok()
+        .map(|a| Address::from_str(&a).expect("invalid ROOT"));
+
     let tx = BaseAaTransaction {
         chain_id,
         nonce,
@@ -73,6 +78,7 @@ fn main() {
         calls,
         access_list: AccessList::default(),
         fee_payer,
+        root,
     };
 
     let signature =

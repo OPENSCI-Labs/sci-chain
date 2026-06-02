@@ -325,6 +325,8 @@ pub struct CompactBaseAaTransaction {
     pub access_list: AccessList,
     /// Optional fee payer (sponsored gas).
     pub fee_payer: Option<Address>,
+    /// Optional root account the calls execute on behalf of.
+    pub root: Option<Address>,
 }
 
 impl Compact for BaseAaTransaction {
@@ -341,6 +343,7 @@ impl Compact for BaseAaTransaction {
             calls: self.calls.clone(),
             access_list: self.access_list.clone(),
             fee_payer: self.fee_payer,
+            root: self.root,
         };
         tx.to_compact(buf)
     }
@@ -356,6 +359,7 @@ impl Compact for BaseAaTransaction {
             calls: tx.calls,
             access_list: tx.access_list,
             fee_payer: tx.fee_payer,
+            root: tx.root,
         };
         (alloy_tx, remaining)
     }
@@ -703,6 +707,7 @@ mod tests {
             ],
             access_list: Default::default(),
             fee_payer: Some(address!("0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266")),
+            root: Some(Address::repeat_byte(0x99)),
         }
     }
 

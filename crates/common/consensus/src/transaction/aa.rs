@@ -66,6 +66,13 @@ pub struct BaseAaTransaction {
     pub access_list: AccessList,
     /// Optional fee payer (sponsored gas). `None` means the sender pays gas.
     pub fee_payer: Option<Address>,
+    /// Optional root account the calls execute on behalf of (Plan A identity model).
+    ///
+    /// The transaction is signed by the **session key**; when `root` is `Some(addr)`, the
+    /// inner calls execute with `msg.sender == addr` after the keychain authorizes
+    /// `keys[root][session_key]`. `None` means a plain batch executed as the signer itself
+    /// (no keychain root-delegation).
+    pub root: Option<Address>,
 }
 
 impl BaseAaTransaction {
@@ -105,20 +112,20 @@ impl BaseAaTransaction {
         }
     }
 
-    /// RLP length of the `fee_payer` field (`Some(addr)` encodes the address, `None`
+    /// RLP length of an optional address field (`Some(addr)` encodes the address, `None`
     /// encodes an empty string).
-    fn fee_payer_rlp_len(&self) -> usize {
-        self.fee_payer.map_or(1, |addr| addr.length())
+    fn opt_address_rlp_len(addr: Option<Address>) -> usize {
+        addr.map_or(1, |a| a.length())
     }
 
-    fn encode_fee_payer(&self, out: &mut dyn BufMut) {
-        match self.fee_payer {
-            Some(addr) => addr.encode(out),
+    fn encode_opt_address(addr: Option<Address>, out: &mut dyn BufMut) {
+        match addr {
+            Some(a) => a.encode(out),
             None => out.put_u8(alloy_rlp::EMPTY_STRING_CODE),
         }
     }
 
-    fn decode_fee_payer(buf: &mut &[u8]) -> alloy_rlp::Result<Option<Address>> {
+    fn decode_opt_address(buf: &mut &[u8]) -> alloy_rlp::Result<Option<Address>> {
         // Peek: an empty string (0x80) means `None`; otherwise decode an address.
         if buf.first().copied() == Some(alloy_rlp::EMPTY_STRING_CODE) {
             *buf = &buf[1..];
@@ -138,7 +145,8 @@ impl RlpEcdsaEncodableTx for BaseAaTransaction {
             + self.gas_limit.length()
             + self.calls.length()
             + self.access_list.length()
-            + self.fee_payer_rlp_len()
+            + Self::opt_address_rlp_len(self.fee_payer)
+            + Self::opt_address_rlp_len(self.root)
     }
 
     fn rlp_encode_fields(&self, out: &mut dyn BufMut) {
@@ -149,7 +157,8 @@ impl RlpEcdsaEncodableTx for BaseAaTransaction {
         self.gas_limit.encode(out);
         self.calls.encode(out);
         self.access_list.encode(out);
-        self.encode_fee_payer(out);
+        Self::encode_opt_address(self.fee_payer, out);
+        Self::encode_opt_address(self.root, out);
     }
 }
 
@@ -165,7 +174,8 @@ impl RlpEcdsaDecodableTx for BaseAaTransaction {
             gas_limit: Decodable::decode(buf)?,
             calls: Decodable::decode(buf)?,
             access_list: Decodable::decode(buf)?,
-            fee_payer: Self::decode_fee_payer(buf)?,
+            fee_payer: Self::decode_opt_address(buf)?,
+            root: Self::decode_opt_address(buf)?,
         })
     }
 }
@@ -304,6 +314,7 @@ mod tests {
             ],
             access_list: AccessList::default(),
             fee_payer: Some(address!("0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266")),
+            root: Some(Address::repeat_byte(0x99)),
         }
     }
 
@@ -324,6 +335,7 @@ mod tests {
     fn rlp_fields_roundtrip_without_fee_payer() {
         let mut tx = sample();
         tx.fee_payer = None;
+        tx.root = None;
         let mut buf = Vec::new();
         tx.rlp_encode_fields(&mut buf);
         assert_eq!(buf.len(), tx.rlp_encoded_fields_length());
@@ -333,6 +345,7 @@ mod tests {
         assert!(slice.is_empty());
         assert_eq!(decoded, tx);
         assert_eq!(decoded.fee_payer, None);
+        assert_eq!(decoded.root, None);
     }
 
     #[test]
@@ -415,6 +428,7 @@ mod evm_tests {
             }],
             access_list: Default::default(),
             fee_payer: None,
+            root: None,
         };
         let sig = Signature::new(U256::from(1u64), U256::from(2u64), false);
 

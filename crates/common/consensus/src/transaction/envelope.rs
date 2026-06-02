@@ -836,6 +836,7 @@ pub(super) mod serde_bincode_compat {
                 }],
                 access_list: Default::default(),
                 fee_payer: Some(address!("0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266")),
+                root: Some(alloy_primitives::Address::repeat_byte(0x99)),
             };
             let sig = Signature::new(U256::from(1u64), U256::from(2u64), false);
             let data = Data {
