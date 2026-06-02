@@ -6,7 +6,7 @@ use std::{
     },
 };
 
-use alloy_consensus::{BlockHeader, Transaction};
+use alloy_consensus::{BlockHeader, Transaction, Typed2718};
 use alloy_primitives::U256;
 use base_common_chains::Upgrades;
 use base_common_evm::{BaseSpecId, L1BlockInfo};
@@ -201,9 +201,29 @@ where
             );
         }
 
+        // Plan A Phase 1: SCI AA transactions (type 0x76) are local-only. Reject any that
+        // arrive over the p2p network — they may only enter the pool via local RPC ingress.
+        let is_aa = transaction.ty() == base_common_consensus::SCI_AA_TX_TYPE_ID;
+        if is_aa && !origin.is_local() {
+            return TransactionValidationOutcome::Invalid(
+                transaction,
+                InvalidTransactionError::TxTypeNotSupported.into(),
+            );
+        }
+
         let outcome = self.inner.validate_one_with_state(origin, transaction, state);
 
-        self.apply_base_checks(outcome)
+        let mut outcome = self.apply_base_checks(outcome);
+
+        // Never propagate AA txs to peers, even when submitted locally: they have no alloy
+        // pooled-tx representation and SCI gossip of AA is intentionally disabled.
+        if is_aa {
+            if let TransactionValidationOutcome::Valid { propagate, .. } = &mut outcome {
+                *propagate = false;
+            }
+        }
+
+        outcome
     }
 
     /// Performs the necessary Base-specific checks based on top of the regular eth outcome.

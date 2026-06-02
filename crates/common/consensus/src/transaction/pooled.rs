@@ -12,7 +12,7 @@ use alloy_consensus::{
 use alloy_eips::eip2718::Encodable2718;
 use alloy_primitives::{B256, Signature, TxHash, bytes};
 
-use crate::BaseTxEnvelope;
+use crate::{BaseAaTransaction, BaseTxEnvelope};
 
 /// All possible transactions that can be included in a response to `GetPooledTransactions`.
 /// A response to `GetPooledTransactions`. This can include a typed signed transaction, but cannot
@@ -35,6 +35,14 @@ pub enum BasePooledTransaction {
     /// A [`TxEip7702`] transaction tagged with type 4.
     #[envelope(ty = 4)]
     Eip7702(Signed<TxEip7702>),
+    /// A [`BaseAaTransaction`] (SCI account-abstraction tx) tagged with type 0x76.
+    ///
+    /// Plan A Phase 1: AA txs are pooled **local-only** — they enter the pool via local
+    /// RPC ingress, are never gossiped to peers (the validator forces `propagate = false`
+    /// and rejects external-origin AA), and are never converted to an alloy `TxEnvelope` /
+    /// `PooledTransaction` (which have no AA representation).
+    #[envelope(ty = 118)]
+    Aa(Signed<BaseAaTransaction>),
 }
 
 impl BasePooledTransaction {
@@ -46,6 +54,7 @@ impl BasePooledTransaction {
             Self::Eip2930(tx) => tx.signature_hash(),
             Self::Eip1559(tx) => tx.signature_hash(),
             Self::Eip7702(tx) => tx.signature_hash(),
+            Self::Aa(tx) => tx.signature_hash(),
         }
     }
 
@@ -56,6 +65,7 @@ impl BasePooledTransaction {
             Self::Eip2930(tx) => tx.hash(),
             Self::Eip1559(tx) => tx.hash(),
             Self::Eip7702(tx) => tx.hash(),
+            Self::Aa(tx) => tx.hash(),
         }
     }
 
@@ -66,6 +76,7 @@ impl BasePooledTransaction {
             Self::Eip2930(tx) => tx.signature(),
             Self::Eip1559(tx) => tx.signature(),
             Self::Eip7702(tx) => tx.signature(),
+            Self::Aa(tx) => tx.signature(),
         }
     }
 
@@ -77,16 +88,26 @@ impl BasePooledTransaction {
             Self::Eip2930(tx) => tx.tx().encode_for_signing(out),
             Self::Eip1559(tx) => tx.tx().encode_for_signing(out),
             Self::Eip7702(tx) => tx.tx().encode_for_signing(out),
+            Self::Aa(tx) => tx.tx().encode_for_signing(out),
         }
     }
 
     /// Converts the transaction into the ethereum [`TxEnvelope`].
+    ///
+    /// # Panics
+    ///
+    /// Panics for the [`Self::Aa`] variant: SCI AA transactions have no ethereum
+    /// representation. AA txs are pooled local-only and are never gossiped or converted
+    /// to an alloy envelope (see [`Self::Aa`]), so this path is unreachable in practice.
     pub fn into_envelope(self) -> TxEnvelope {
         match self {
             Self::Legacy(tx) => tx.into(),
             Self::Eip2930(tx) => tx.into(),
             Self::Eip1559(tx) => tx.into(),
             Self::Eip7702(tx) => tx.into(),
+            Self::Aa(_) => {
+                unreachable!("AA pooled txs are local-only and have no ethereum TxEnvelope")
+            }
         }
     }
 
@@ -97,6 +118,7 @@ impl BasePooledTransaction {
             Self::Eip2930(tx) => tx.into(),
             Self::Eip1559(tx) => tx.into(),
             Self::Eip7702(tx) => tx.into(),
+            Self::Aa(tx) => tx.into(),
         }
     }
 
@@ -131,6 +153,14 @@ impl BasePooledTransaction {
             _ => None,
         }
     }
+
+    /// Returns the [`BaseAaTransaction`] variant if the transaction is an AA transaction.
+    pub const fn as_aa(&self) -> Option<&BaseAaTransaction> {
+        match self {
+            Self::Aa(tx) => Some(tx.tx()),
+            _ => None,
+        }
+    }
 }
 
 impl From<Signed<TxLegacy>> for BasePooledTransaction {
@@ -157,13 +187,27 @@ impl From<Signed<TxEip7702>> for BasePooledTransaction {
     }
 }
 
+impl From<Signed<BaseAaTransaction>> for BasePooledTransaction {
+    fn from(v: Signed<BaseAaTransaction>) -> Self {
+        Self::Aa(v)
+    }
+}
+
 impl From<BasePooledTransaction> for alloy_consensus::transaction::PooledTransaction {
+    /// # Panics
+    ///
+    /// Panics for the AA variant: alloy's `PooledTransaction` has no AA representation.
+    /// AA txs are pooled local-only and never converted to an alloy pooled tx (gossip is
+    /// disabled), so this path is unreachable in practice.
     fn from(value: BasePooledTransaction) -> Self {
         match value {
             BasePooledTransaction::Legacy(tx) => tx.into(),
             BasePooledTransaction::Eip2930(tx) => tx.into(),
             BasePooledTransaction::Eip1559(tx) => tx.into(),
             BasePooledTransaction::Eip7702(tx) => tx.into(),
+            BasePooledTransaction::Aa(_) => {
+                unreachable!("AA pooled txs are local-only and have no alloy PooledTransaction")
+            }
         }
     }
 }
@@ -208,6 +252,9 @@ impl alloy_consensus::transaction::SignerRecoverable for BasePooledTransaction {
                 alloy_consensus::transaction::SignerRecoverable::recover_unchecked_with_buf(tx, buf)
             }
             Self::Eip7702(tx) => {
+                alloy_consensus::transaction::SignerRecoverable::recover_unchecked_with_buf(tx, buf)
+            }
+            Self::Aa(tx) => {
                 alloy_consensus::transaction::SignerRecoverable::recover_unchecked_with_buf(tx, buf)
             }
         }
@@ -258,6 +305,7 @@ impl InMemorySize for BasePooledTransaction {
             Self::Eip2930(tx) => tx.size(),
             Self::Eip1559(tx) => tx.size(),
             Self::Eip7702(tx) => tx.size(),
+            Self::Aa(tx) => tx.size(),
         }
     }
 }

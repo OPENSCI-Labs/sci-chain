@@ -196,6 +196,10 @@ impl From<BaseTypedTransaction> for BaseTransactionRequest {
             BaseTypedTransaction::Eip1559(tx) => Self(tx.into()),
             BaseTypedTransaction::Eip7702(tx) => Self(tx.into()),
             BaseTypedTransaction::Deposit(tx) => tx.into(),
+            // PoC: AA txs are surfaced over RPC as their first-call EIP-1559 approximation
+            // (same convention as the alloy `TransactionRequest` conversion in
+            // base-common-consensus). Full multi-call RPC representation is a later refinement.
+            BaseTypedTransaction::Aa(tx) => Self(tx.to_eip1559_first_call().into()),
         }
     }
 }
@@ -208,6 +212,7 @@ impl From<BaseTxEnvelope> for BaseTransactionRequest {
             BaseTxEnvelope::Eip1559(tx) => tx.into(),
             BaseTxEnvelope::Eip7702(tx) => tx.into(),
             BaseTxEnvelope::Deposit(tx) => tx.into(),
+            BaseTxEnvelope::Aa(tx) => Self(tx.into_parts().0.to_eip1559_first_call().into()),
         }
     }
 }

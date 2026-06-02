@@ -340,20 +340,29 @@ impl BaseTxEnvelope {
             Self::Deposit(tx) => {
                 Err(ValueError::new(tx.into(), "Deposit transactions cannot be pooled"))
             }
-            Self::Aa(tx) => {
-                Err(ValueError::new(tx.into(), "AA transactions cannot be pooled (PoC)"))
-            }
+            // Plan A Phase 1: AA txs are poolable, but local-only — the validator rejects
+            // external-origin AA and disables propagation, so they never gossip to peers.
+            Self::Aa(tx) => Ok(tx.into()),
         }
     }
 
     /// Attempts to convert the envelope into the ethereum pooled variant.
     ///
-    /// Returns an error if the envelope's variant is incompatible with the pooled format:
-    /// [`TxDeposit`].
+    /// Returns an error if the envelope's variant is incompatible with the ethereum pooled
+    /// format: [`TxDeposit`] and the SCI AA transaction (neither has an alloy representation).
     pub fn try_into_eth_pooled(
         self,
     ) -> Result<alloy_consensus::transaction::PooledTransaction, ValueError<Self>> {
-        self.try_into_pooled().map(Into::into)
+        match self {
+            // AA has no alloy `PooledTransaction` representation; reject before the
+            // infallible `BasePooledTransaction -> alloy::PooledTransaction` conversion
+            // (which would otherwise be unreachable for AA) is reached.
+            tx @ Self::Aa(_) => Err(ValueError::new(
+                tx,
+                "AA transactions cannot be converted to an ethereum pooled transaction",
+            )),
+            other => other.try_into_pooled().map(Into::into),
+        }
     }
 
     /// Attempts to convert the L2 variant into an ethereum [`TxEnvelope`].

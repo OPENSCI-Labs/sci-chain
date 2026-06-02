@@ -117,6 +117,8 @@ impl<C: Upgrades> UnifiedReceiptBuilder<C> {
                 OpTxType::Eip2930 => BaseReceipt::Eip2930(receipt),
                 OpTxType::Eip1559 => BaseReceipt::Eip1559(receipt),
                 OpTxType::Eip7702 => BaseReceipt::Eip7702(receipt),
+                // PoC: AA txs map to an EIP-1559 receipt (BaseReceipt has no AA variant).
+                OpTxType::Aa => BaseReceipt::Eip1559(receipt),
                 OpTxType::Deposit => unreachable!(),
             })
         }

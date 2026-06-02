@@ -47,6 +47,13 @@ impl reth_primitives_traits::InMemorySize for TxDeposit {
     }
 }
 
+impl reth_primitives_traits::InMemorySize for BaseAaTransaction {
+    #[inline]
+    fn size(&self) -> usize {
+        Self::size(self)
+    }
+}
+
 impl reth_primitives_traits::InMemorySize for DepositReceipt {
     fn size(&self) -> usize {
         self.inner.size()
@@ -87,6 +94,7 @@ impl reth_primitives_traits::InMemorySize for BasePooledTransaction {
             Self::Eip2930(tx) => tx.size(),
             Self::Eip1559(tx) => tx.size(),
             Self::Eip7702(tx) => tx.size(),
+            Self::Aa(tx) => tx.size(),
         }
     }
 }
