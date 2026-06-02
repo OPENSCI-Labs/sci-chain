@@ -14,7 +14,7 @@
 use revm::{
     bytecode::Bytecode,
     context_interface::{
-        Cfg, ContextTr, JournalTr, LocalContextTr, Transaction,
+        Block, Cfg, ContextTr, JournalTr, LocalContextTr, Transaction,
         result::{ExecutionResult, FromStringError},
     },
     handler::{
@@ -29,7 +29,7 @@ use revm::{
         interpreter::EthInterpreter,
         interpreter_action::{FrameInit, FrameInput},
     },
-    primitives::TxKind,
+    primitives::{TxKind, U256},
     state::EvmState,
 };
 
@@ -102,7 +102,71 @@ where
         &self,
         evm: &mut Self::Evm,
     ) -> Result<(), Self::Error> {
-        self.inner.validate_against_state_and_deduct_caller(evm)?;
+        // Plan A 2b — fee_payer sponsored gas. When an AA tx names a `fee_payer` (other
+        // than the signing session key), gas is paid by the fee_payer, so the session key
+        // may hold no funds. revm's inner deduct always charges `tx.caller` (the signer)
+        // and bumps its nonce, so we pre-fund the signer from fee_payer with the MAX gas
+        // the deduct can require (AA value is 0 — see `core.rs` — so this is pure gas),
+        // then return the unspent remainder; the signer nets zero and fee_payer pays the
+        // effective gas. The unused-gas refund is moved back to fee_payer in
+        // [`reimburse_caller`].
+        let signer = evm.ctx().tx().caller();
+        // Sponsored gas is only allowed from the `root` account: the session key's right to
+        // spend root's funds (gas included — D-gas) is authorized by the keychain
+        // (`keys[root][session_key]`, enforced by the pre-execution hook in 2c). An
+        // arbitrary third-party sponsor would need its own signature, which the AA tx does
+        // not carry, so reject `fee_payer != root` to avoid draining an unconsenting account.
+        let root = evm.ctx().tx().aa_parts().and_then(|a| a.root);
+        let raw_fee_payer = evm.ctx().tx().aa_parts().and_then(|a| a.fee_payer);
+        if raw_fee_payer.is_some() && raw_fee_payer != root {
+            return Err(ERROR::from_string(
+                "AA fee_payer must equal root (sponsored gas is authorized via the keychain on \
+                 the root account)"
+                    .into(),
+            ));
+        }
+        let fee_payer = raw_fee_payer.filter(|fp| *fp != signer);
+
+        match fee_payer {
+            Some(fp) => {
+                // Sponsor everything Base's inner deduct charges the signer — L2 gas AND the
+                // L1 data / operator cost. We can't know the exact total before the inner
+                // runs (the L1 cost depends on the L1BlockInfo it fetches), so: pre-fund the
+                // signer with the MAX L2 gas (gas_limit * max_fee; AA value is 0) from
+                // fee_payer, run the inner deduct, then **bidirectionally** reconcile against
+                // the signer's starting balance — return any excess, or cover any shortfall
+                // (e.g. the L1 cost that exceeded the pre-funded gas) from fee_payer — so the
+                // signer nets exactly zero and fee_payer bears the full effective cost.
+                let max_gas = {
+                    let (_block, tx, _cfg, _journal, _chain, _local) = evm.ctx().all_mut();
+                    tx.max_balance_spending()
+                        .map_err(|e| ERROR::from_string(format!("max gas overflow: {e:?}")))?
+                };
+                let signer_before =
+                    evm.ctx().journal_mut().load_account(signer)?.data.info.balance;
+                if let Some(err) = evm.ctx().journal_mut().transfer(fp, signer, max_gas)? {
+                    return Err(ERROR::from_string(format!(
+                        "fee_payer {fp:?} cannot cover gas: {err:?}"
+                    )));
+                }
+                self.inner.validate_against_state_and_deduct_caller(evm)?;
+                let signer_after =
+                    evm.ctx().journal_mut().load_account(signer)?.data.info.balance;
+                let (from, to, amount) = if signer_after >= signer_before {
+                    (signer, fp, signer_after - signer_before) // return excess to fee_payer
+                } else {
+                    (fp, signer, signer_before - signer_after) // fee_payer covers the shortfall
+                };
+                if amount != U256::ZERO {
+                    if let Some(err) = evm.ctx().journal_mut().transfer(from, to, amount)? {
+                        return Err(ERROR::from_string(format!(
+                            "fee_payer gas reconcile failed: {err:?}"
+                        )));
+                    }
+                }
+            }
+            None => self.inner.validate_against_state_and_deduct_caller(evm)?,
+        }
 
         // Deposit (system) txs invoke predeploy state ticks and must bypass the SCI
         // keychain hook — they aren't agent txs and the keychain isn't relevant.
@@ -230,7 +294,28 @@ where
         evm: &mut Self::Evm,
         frame_result: &mut <<Self::Evm as EvmTr>::Frame as FrameTr>::FrameResult,
     ) -> Result<(), Self::Error> {
-        self.inner.reimburse_caller(evm, frame_result)
+        // Plan A 2b — pair with the fee_payer pre-fund in
+        // [`validate_against_state_and_deduct_caller`]: revm refunds unused gas to the
+        // signer (`tx.caller`); move that refund on to fee_payer so it nets the effective
+        // gas used and the signer nets zero.
+        let signer = evm.ctx().tx().caller();
+        let fee_payer =
+            evm.ctx().tx().aa_parts().and_then(|a| a.fee_payer).filter(|fp| *fp != signer);
+
+        let Some(fp) = fee_payer else {
+            return self.inner.reimburse_caller(evm, frame_result);
+        };
+
+        let before = evm.ctx().journal_mut().load_account(signer)?.data.info.balance;
+        self.inner.reimburse_caller(evm, frame_result)?;
+        let after = evm.ctx().journal_mut().load_account(signer)?.data.info.balance;
+        let refund = after.saturating_sub(before);
+        if refund != U256::ZERO {
+            if let Some(err) = evm.ctx().journal_mut().transfer(signer, fp, refund)? {
+                return Err(ERROR::from_string(format!("fee_payer refund failed: {err:?}")));
+            }
+        }
+        Ok(())
     }
 
     fn refund(

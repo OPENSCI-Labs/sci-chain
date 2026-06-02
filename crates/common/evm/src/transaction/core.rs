@@ -281,8 +281,16 @@ impl FromTxWithEncoded<BaseTxEnvelope> for BaseTransaction<TxEnv> {
             // `SciHandler::execution()` runs the multi-call executor (Phase 2 / 2a).
             BaseTxEnvelope::Aa(tx) => {
                 let aa = tx.tx();
+                let mut base = TxEnv::from_recovered_tx(&aa.to_eip1559_first_call(), caller);
+                // The multi-call executor transfers each call's value from `root` (or the
+                // signer) per-frame, so the base env's value must be 0: otherwise revm's
+                // balance check would require the signer to also hold the first call's
+                // value, and gas (Plan A 2b) is metered separately. Per-call value is still
+                // enforced at execution (a call that can't fund its transfer reverts the
+                // whole atomic batch).
+                base.value = U256::ZERO;
                 Self {
-                    base: TxEnv::from_recovered_tx(&aa.to_eip1559_first_call(), caller),
+                    base,
                     enveloped_tx: Some(encoded),
                     deposit: Default::default(),
                     aa: Some(AaTransactionParts {
