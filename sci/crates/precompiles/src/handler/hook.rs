@@ -204,6 +204,105 @@ where
     }
 }
 
+/// One decoded call from an AA transaction batch, as handed to [`run_aa_keychain_hook`].
+///
+/// The AA tx layout lives in `base-common-consensus` / `base-common-evm`, which depend on
+/// this crate — so the `SciHandler` (which can read the tx's AA parts) decodes the batch
+/// and passes it in, rather than this crate reaching back up to those types.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AaCall {
+    /// Call target (or CREATE).
+    pub to: TxKind,
+    /// Native value forwarded to the call (from `root`).
+    pub value: U256,
+    /// Calldata forwarded to the call.
+    pub input: Vec<u8>,
+}
+
+/// AA-native keychain pre-execution hook (Plan A 2c) — the authorization gate.
+///
+/// Unlike [`run_pre_execution_hook`] (the Plan B 7702 / `SCIAgentDelegator` path, which
+/// identifies the agent tx by reading `code(tx.to)`), this is driven by the AA tx itself:
+/// the `SciHandler` passes the `root` account the calls execute on behalf of, the
+/// `session_key` (the AA tx signer), and the decoded `calls`. It enforces, for an AA tx
+/// whose `root` is set:
+///
+/// 1. **Authorization** — `keys[root][session_key]` must be an active access key; otherwise
+///    the tx is rejected (this is what makes the 2a/2b `root`-execution + sponsored gas
+///    safe: an arbitrary signer cannot act as, or spend the gas of, an unconsenting root).
+/// 2. **Circuit breaker** — the session key must not be tripped.
+/// 3. **Call scope** — every call must satisfy the access key's scope rules.
+///
+/// Transient writes (`transaction_key` / `tx_origin`) are wrapped in a journal checkpoint
+/// so a rejection leaks no state. Spending-limit metering (pre-flight + deferred deduction,
+/// including native value and gas via the `address(0)` sentinel) is layered on separately
+/// (2c-ii).
+pub fn run_aa_keychain_hook<EVM, ERROR>(
+    evm: &mut EVM,
+    root: Address,
+    session_key: Address,
+    calls: &[AaCall],
+) -> Result<HookOutcome<ERROR>, ERROR>
+where
+    EVM: EvmTr<Context: ContextTr<Db: AlloyDatabase, Journal: JournalTr<Database: AlloyDatabase> + Debug>>,
+    ERROR: From<<<EVM::Context as ContextTr>::Db as Database>::Error> + FromStringError,
+{
+    // Set tx_origin (mirrors the Plan B hook) so keychain admin ops invoked within the
+    // batch see a non-zero origin, and reset the transaction_key transient slot.
+    enter_keychain_storage(evm.ctx(), || -> crate::error::Result<()> {
+        let mut kc = AccountKeychain::default();
+        kc.set_tx_origin(session_key)?;
+        kc.set_transaction_key(alloy_primitives::Address::ZERO)?;
+        Ok(())
+    })
+    .map_err(|e| ERROR::from_string(format!("keychain tx_origin setup failed: {e:?}")))?;
+
+    // 1. Authorization: keys[root][session_key] must be active.
+    let is_active = enter_keychain_storage(evm.ctx(), || {
+        AccountKeychain::default().key_is_active(root, session_key)
+    })
+    .map_err(|e| ERROR::from_string(format!("keychain probe failed: {e:?}")))?;
+    if !is_active {
+        return Ok(HookOutcome::Reject(ERROR::from_string(format!(
+            "AA tx unauthorized: session key {session_key:?} has no active keychain key for root {root:?}",
+        ))));
+    }
+
+    // 2/3. CircuitBreaker + per-call scope, wrapped in a checkpoint so any partial transient
+    //      write is rolled back on rejection.
+    let checkpoint = evm.ctx().journal_mut().checkpoint();
+    let hook_result = enter_keychain_storage(evm.ctx(), || -> crate::error::Result<()> {
+        let cb = SciAgentState::default();
+        if cb.is_tripped(isTrippedCall { sessionKey: session_key })? {
+            return Err(crate::error::TempoPrecompileError::Fatal(format!(
+                "agent session key {session_key:?} is tripped",
+            )));
+        }
+
+        let mut kc = AccountKeychain::default();
+        kc.set_transaction_key(session_key)?;
+        kc.set_tx_origin(session_key)?;
+
+        for call in calls {
+            kc.validate_call_scope_for_transaction(root, session_key, &call.to, &call.input)?;
+        }
+        Ok(())
+    });
+
+    match hook_result {
+        Ok(()) => {
+            evm.ctx().journal_mut().checkpoint_commit();
+            Ok(HookOutcome::Pass)
+        }
+        Err(e) => {
+            evm.ctx().journal_mut().checkpoint_revert(checkpoint);
+            Ok(HookOutcome::Reject(ERROR::from_string(format!(
+                "SCI AA keychain hook rejected tx: {e:?}",
+            ))))
+        }
+    }
+}
+
 /// Applies deferred spending-limit deductions when the tx body executes successfully.
 ///
 /// Pairs with [`run_pre_execution_hook`]: the hook does a read-only pre-flight check on

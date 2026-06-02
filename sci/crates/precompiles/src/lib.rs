@@ -36,7 +36,10 @@ pub mod sci_agent_state;
 pub use sci_agent_state::SciAgentState;
 
 pub mod handler;
-pub use handler::{HookOutcome, apply_post_execution_deductions, run_pre_execution_hook};
+pub use handler::{
+    AaCall, HookOutcome, apply_post_execution_deductions, run_aa_keychain_hook,
+    run_pre_execution_hook,
+};
 
 #[cfg(any(test, feature = "test-utils"))]
 pub mod test_util;

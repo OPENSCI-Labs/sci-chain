@@ -22,4 +22,7 @@
 pub mod decode;
 mod hook;
 
-pub use hook::{HookOutcome, apply_post_execution_deductions, run_pre_execution_hook};
+pub use hook::{
+    AaCall, HookOutcome, apply_post_execution_deductions, run_aa_keychain_hook,
+    run_pre_execution_hook,
+};

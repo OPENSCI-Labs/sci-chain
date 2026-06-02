@@ -11,6 +11,8 @@
 //! `base-common-evm` — see `sci/crates/precompiles/src/handler/mod.rs` for the
 //! architecture rationale.
 
+use alloc::{boxed::Box, format, vec::Vec};
+
 use revm::{
     bytecode::Bytecode,
     context_interface::{
@@ -33,7 +35,10 @@ use revm::{
     state::EvmState,
 };
 
-use sci_precompiles::{HookOutcome, apply_post_execution_deductions, run_pre_execution_hook};
+use sci_precompiles::{
+    AaCall, HookOutcome, apply_post_execution_deductions, run_aa_keychain_hook,
+    run_pre_execution_hook,
+};
 
 use crate::{
     L1BlockInfo, BaseHaltReason, BaseSpecId,
@@ -174,9 +179,35 @@ where
             return Ok(());
         }
 
-        match run_pre_execution_hook::<EVM, ERROR>(evm)? {
-            HookOutcome::Pass => Ok(()),
-            HookOutcome::Reject(err) => Err(err),
+        // Plan A 2c — AA agent-tx authorization. An AA tx with `root` set acts on behalf
+        // of `root`, so the keychain must authorize the session key (`keys[root][signer]`)
+        // and gate the batch (circuit breaker + per-call scope). Extract the batch here
+        // (the hook crate can't read the AA tx env) and run the AA-native keychain hook.
+        // AA txs without `root` (a plain batch executed as the signer) and every non-AA tx
+        // fall through to the legacy Plan B hook, which no-ops for non-agent traffic.
+        let aa_calls: Option<Vec<AaCall>> = if root.is_some() {
+            evm.ctx().tx().aa_parts().map(|parts| {
+                parts
+                    .calls
+                    .iter()
+                    .map(|c| AaCall { to: c.to, value: c.value, input: c.input.to_vec() })
+                    .collect()
+            })
+        } else {
+            None
+        };
+
+        match (root, aa_calls) {
+            (Some(root_addr), Some(calls)) => {
+                match run_aa_keychain_hook::<EVM, ERROR>(evm, root_addr, signer, &calls)? {
+                    HookOutcome::Pass => Ok(()),
+                    HookOutcome::Reject(err) => Err(err),
+                }
+            }
+            _ => match run_pre_execution_hook::<EVM, ERROR>(evm)? {
+                HookOutcome::Pass => Ok(()),
+                HookOutcome::Reject(err) => Err(err),
+            },
         }
     }
 
