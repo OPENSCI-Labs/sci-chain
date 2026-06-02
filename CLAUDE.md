@@ -6,18 +6,31 @@ SCI Chain is an Agent-native Ethereum L2, forked from Base Azul v0.9 (`base/base
 It adds a protocol-level permission sandbox for AI Agents via the Keychain Precompile
 (ported from Tempo v1.6.0), with MPP (Machine Payments Protocol) as the Agent access layer.
 
+**Agent-tx mechanism — Plan A (native AA transaction type).** The agent's "act as root"
+calls ride a native account-abstraction transaction type (`type 0x76`,
+[`BaseAaTransaction`]) carrying a batch of `calls[]` and an optional `fee_payer`
+(sponsored gas). A Rust pre-execution hook in the EVM handler decodes the batch and
+applies the keychain checks (CircuitBreaker → Scope → SpendingLimit) before execution.
+This supersedes the earlier **Plan B** design (standard EIP-1559 tx + EIP-7702 delegation
+to `SCIAgentDelegator` + precompile), which is retained only as historical context below.
+Plan A work lives on branch `feat/plan-a-aa-keychain`; see `sci/docs/test/plan-a-status.md`
+for the phase tracker. The Keychain Precompile, shim crates, and Tempo-sync workflow are
+unchanged by the Plan A pivot — only the agent-tx carrier and the set of touched Base
+files differ.
+
 Chain ID: 42001 | Rust edition: 2024 | Rust version: 1.93.1 | Linker: mold
 
 ## Architecture
 
 ```
 Agent → mppx.fetch() → SCI Agent Gateway (MPP 402 + REST)
-                              ↓ JSON-RPC
+                              ↓ JSON-RPC (AA tx, type 0x76)
                         SCI Chain (Base Azul v0.9 fork)
+                          AA tx type 0x76 (BaseAaTransaction): calls[] + fee_payer
                           Pre-execution hook: CircuitBreaker → Scope → SpendingLimit
                           Precompile: 0xAAAA.. AccountKeychain
                           Predeploys: 0xBBBB01 Registry, 0xBBBB02 Budget, 0xBBBB03 Breaker
-                          0xCCCC01 SCIAgentDelegator (EIP-7702)
+                          0xCCCC01 SCIAgentDelegator (Plan B / EIP-7702, legacy)
                           IDA contract (ERC-721 + ERC-6551 TBA)
 ```
 
@@ -26,7 +39,10 @@ Agent → mppx.fetch() → SCI Agent Gateway (MPP 402 + REST)
 ```
 sci-chain/
 ├── crates/                    ← Base original Rust code (DO NOT add files here)
-│   └── common/evm/            ← ONLY Base crate we modify (precompile registration)
+│   ├── common/evm/            ← Base crate we modify (precompile + SciHandler hook)
+│   ├── common/consensus/      ← Plan A: AA tx type 0x76 (aa.rs + envelope/pooled/codec)
+│   ├── common/rpc-types/      ← Plan A: AA → TransactionRequest arm
+│   └── execution/{evm,flashblocks,txpool}/ ← Plan A: AA receipt/pool/validator arms
 ├── etc/docker/devnet-env      ← Modified: Chain ID 42001
 ├── sci/                       ← ALL SCI additions go here
 │   ├── crates/                ←   Rust (Keychain precompile)
@@ -50,10 +66,18 @@ sci-chain/
 
 ## Critical Rules
 
-1. **Never add files to Base directories** (`crates/`, `bin/`, `devnet/`, `etc/`, `docs/`,
-   `actions/`, `baseup/`). All SCI code goes under `sci/`.
-2. **Only 7 Base files are touched** — 6 modified, 1 added (kept intentionally small; any
-   new modification needs to be added here and justified):
+1. **Prefer adding files under `sci/`** (`crates/`, `bin/`, `devnet/`, `etc/`, `docs/`,
+   `actions/`, `baseup/` are Base directories). The keychain-precompile integration adds
+   exactly **one** new Base file (`sci_handler.rs`); everything else for it lives under
+   `sci/`. **Plan A is the exception**: a native transaction type cannot be expressed as
+   an `sci/`-only addition — it must be threaded through Base's shared `BaseTxEnvelope`
+   enum and its consumers (consensus codec, rpc-types, execution receipt/pool paths), so
+   Plan A modifies a broader set of Base files in place. See Rule #2 group B.
+2. **Touched Base files are tracked in two groups.** Any new Base modification must be
+   added to the relevant group here and justified.
+
+   **Group A — Keychain precompile integration** (6 modified, 1 added; kept intentionally
+   small):
    - `Cargo.toml` — workspace members include `sci/crates/*` and corresponding
      `workspace.dependencies` entries (`sci-precompiles`, `sci-precompiles-macros`,
      `sci-precompile-abi`, `sci-revm-shim`).
@@ -88,6 +112,34 @@ sci-chain/
    - `etc/docker/devnet-env` — Chain ID 42001 (note: as of the v0.9 uplift this
      override is documented but not yet applied to the file — the line still reads
      `L2_CHAIN_ID=84538453`; a follow-up should reconcile docs vs. file).
+
+   **Group B — Plan A AA transaction type** (`type 0x76`; branch `feat/plan-a-aa-keychain`;
+   see `sci/docs/test/plan-a-status.md`). A new tx type must be threaded through Base's
+   shared envelope and every match site that enumerates tx variants, so these Base files
+   are modified in place (unavoidable for a native tx type):
+   - `crates/common/consensus/src/transaction/aa.rs` (**new file**) — `BaseAaTransaction`
+     (chain_id / nonce / 1559 fees / `calls[]` / access_list / `fee_payer`) + `Call`,
+     RLP/2718 codec, `Transaction`/`Typed2718`/`SignableTransaction` impls, and the PoC
+     `to_eip1559_first_call()` approximation helper.
+   - `crates/common/consensus/src/transaction/{envelope,typed,tx_type}.rs` — `Aa` variant
+     wired into `BaseTxEnvelope` / `BaseTypedTransaction` / `OpTxType` (~40 match arms);
+     `try_into_pooled` accepts AA, `try_into_eth_pooled` rejects it (no alloy repr).
+   - `crates/common/consensus/src/transaction/pooled.rs` — `Aa` in `BasePooledTransaction`
+     (**local-only**: see Plan A divergences); alloy-only conversions are documented
+     `unreachable!`.
+   - `crates/common/consensus/src/transaction/core.rs` — `FromTxWithEncoded` execution arm.
+   - `crates/common/consensus/src/reth_compat.rs` — reth `Compact` (`CompactCall` /
+     `CompactBaseAaTransaction` mirror `CompactTxDeposit`), `OpTxType` extended-id arm,
+     `ToTxCompact`/`FromTxCompact`, `InMemorySize`; receipt mapping `OpTxType::Aa → Eip1559`.
+   - `crates/common/consensus/src/{lib,transaction/mod}.rs` — re-exports
+     (`BaseAaTransaction`, `Call`, `SCI_AA_TX_TYPE_ID`, `CompactCall`,
+     `CompactBaseAaTransaction`) + bincode-compat `Aa` variant (`Cow<'a, BaseAaTransaction>`).
+   - `crates/common/rpc-types/src/transaction/request.rs` — AA → `TransactionRequest`
+     (first-call EIP-1559 PoC approximation).
+   - `crates/execution/evm/src/receipts.rs`,
+     `crates/execution/flashblocks/src/receipt_builder.rs` — AA receipt arm (EIP-1559).
+   - `crates/execution/txpool/src/validator.rs` — AA local-only: reject external-origin
+     AA, force `propagate = false`.
 3. **Tempo code is reference only**. Source is at `/home/gavin/opensci/sci-dev/tempo/`
    (an earlier draft of this guide listed `~/sci-dev/Tempo-ref/` — that path does not exist
    on this machine). Copy and adapt, never import as a git dependency.
@@ -452,6 +504,35 @@ just devnet status
 - `sci/contracts/src/integration/SCIAgentDelegator.sol` — EIP-7702 batch executor
 - `sci/contracts/src/interfaces/IAccountKeychain.sol` — Precompile interface
 
+## AA Transaction Type (Plan A, `type 0x76`)
+
+The agent-tx carrier. Defined in `crates/common/consensus/src/transaction/aa.rs` as
+`BaseAaTransaction { chain_id, nonce, max_priority_fee_per_gas, max_fee_per_gas,
+gas_limit, calls: Vec<Call>, access_list, fee_payer: Option<Address> }`, signed with a
+standard secp256k1 signature so it rides the existing envelope/signing plumbing. Wired
+into `BaseTxEnvelope::Aa` / `BaseTypedTransaction::Aa` / `OpTxType::Aa` (118 = 0x76).
+Full file list is Critical Rule #2 Group B.
+
+**Decisions (2026-06-01/02):** D-gas = yes (gas metered into the keychain limit);
+D2-B (native `value` allowed, metered into an `address(0)` sentinel limit shared with
+gas); D3-B (standard ERC-20 + handler atomic-batch deduction, **no TIP-20 precompile**);
+AA txs are **pooled local-only** (enter via local RPC, never gossiped, never converted
+to alloy `TxEnvelope`/`PooledTransaction`).
+
+**Status (phase tracker `sci/docs/test/plan-a-status.md`):**
+- Phase 0 PoC — Go/No-Go gate passed: decode → execute → proof for a minimal AA tx.
+- Phase 1 (in progress) — full tx type: reth `Compact` + serde-bincode-compat codecs
+  (done, stubs removed); local-only mempool intake (done). Remaining = devnet runtime
+  verification (does reth's inner `EthTransactionValidator` accept 0x76; multi-call
+  intrinsic gas; payload selection).
+- Phase 2 — handler: `fee_payer` + scope pre-check + atomic batch deduction (deduction
+  must cover the `transferWithMemo` selector). Phase 3 — keychain + native sentinel limit.
+
+**PoC simplifications still to backfill:** execution approximates the AA tx as its
+first call via `BaseAaTransaction::to_eip1559_first_call()` (real `calls[]` batch =
+Phase 2); AA receipts map to an EIP-1559 receipt; RPC `TransactionRequest` surfaces only
+the first call.
+
 ## How the Keychain Precompile Is Wired
 
 Hook point: `crates/common/evm/src/factory.rs` inside `BaseEvmFactory::create_evm` (and
@@ -474,33 +555,35 @@ on `feat/p0-1-keychain` as P0-1.7 / P0-1.8. Design locked 2026-05-20 — see nex
 ## Pre-execution Hook Design (P0-1.7 / P0-1.8)
 
 The Rust hook intercepts every tx before EVM execution and applies keychain checks
-when the tx is identified as an agent tx. Design decisions reached 2026-05-20:
+when the tx is identified as an agent tx. Core design (Q2–Q4) was locked 2026-05-20;
+the agent-tx identification (Q1) was superseded by Plan A on 2026-06-01.
 
-### Agent-tx identification (Q1: scheme A + mandatory 7702)
+### Agent-tx identification (Q1)
 
-Hook reads `code(tx.to)`. A tx is an "agent tx" iff:
+**Plan A (current).** A tx is an "agent tx" iff its type is `0x76`
+([`BaseAaTransaction`]). The tx type itself is the signal — no `code(tx.to)` read, no
+mandatory EIP-7702 delegation. The AA tx carries `calls[]` and `fee_payer` natively;
+`session_key = signer`, and the root account / key binding is resolved from the keychain.
+The Phase 2 handler decodes the AA tx's `calls[]` directly (no `SCIAgentDelegator`
+indirection). Mapping the existing keychain hook onto this path is Plan A Phase 2 — see
+`sci/docs/test/plan-a-status.md`.
 
-1. `tx.to` carries an EIP-7702 delegation header (`0xef0100 || delegate_address`),
-   AND `delegate_address == SCI_AGENT_DELEGATOR_ADDRESS` (0xCCCC...01).
-2. `keys[tx.to][tx.from]` exists in the keychain (a registered, non-revoked, non-expired
-   access key).
-
-When both hold: `root = tx.to`, `session_key = tx.from`. Otherwise the hook is a no-op
-for that tx (standard EVM flow).
-
-**Security rationale.** Without 7702 delegation, a session key signing as itself is
-just a powerless EOA (no funds, no roles), so the keychain authorization is inert
-data. All "act as root" power flows through `SCIAgentDelegator.execute(...)`, which
-`require(getTransactionKey() != address(0))` — and only the hook can set that
-transient slot. So skipping the hook ≠ skipping protection; the closed loop is:
-`7702-delegated tx → hook fires → sets transaction_key → delegator accepts`.
+**Plan B (legacy, retained for context).** The original scheme read `code(tx.to)` and
+required an EIP-7702 delegation: a tx was an agent tx iff `tx.to` carried
+`0xef0100 || SCI_AGENT_DELEGATOR_ADDRESS` (0xCCCC…01) **and** `keys[tx.to][tx.from]`
+existed in the keychain — then `root = tx.to`, `session_key = tx.from`. Its security
+rationale: without 7702 delegation a session key signing as itself is a powerless EOA,
+and all "act as root" power flowed through `SCIAgentDelegator.execute(...)`, which
+`require(getTransactionKey() != address(0))` — a slot only the hook could set. Plan A
+removes this indirection because the AA tx type carries the batch directly.
 
 ### Per-call check placement (Q2: Rust hook decodes batch)
 
-The hook decodes `tx.input` as `SCIAgentDelegator::execute(Call[])`, loops through
-each `Call`, and validates scope + deducts spending limit per call **before** EVM
-execution begins. This matches Tempo's `prevalidate_keychain_call_scopes` pattern
-(`tempo/crates/revm/src/handler.rs:395-492`).
+The hook loops through each `Call` and validates scope + deducts spending limit per call
+**before** EVM execution begins. This matches Tempo's `prevalidate_keychain_call_scopes`
+pattern (`tempo/crates/revm/src/handler.rs:395-492`). Under Plan A the `calls[]` come
+from the AA tx body directly; under Plan B they were decoded from `tx.input` as
+`SCIAgentDelegator::execute(Call[])`.
 
 **Trade-off accepted.** Rust crate has to import the `Call[]` ABI from
 `sci-precompile-abi`. ABI lives canonically in
@@ -598,7 +681,10 @@ for free.
 
 ## Branches
 
-- `main` — stable, protected (PR + 1 review required)
+- `main` — stable, protected (PR + 1 review required). Still on the Plan B baseline.
+- `feat/plan-a-aa-keychain` — **Plan A: native AA tx type (0x76)** (R). Current active
+  line; based on `feat/p0-2-contracts-v1.7.1`. Not yet merged to main. Phase tracker:
+  `sci/docs/test/plan-a-status.md`.
 - `feat/p0-1-keychain` — Keychain precompile work (R)
 - `feat/p0-2-contracts` — Solidity contract work (S)
 - `feat/p0-3-gateway` — MPP Gateway work (S)
@@ -683,8 +769,13 @@ isn't incremented by the tx. The trap is specific to self-auth.
 
 - Do not run `cargo fmt` on Base original files (creates massive diffs)
 - Do not update Base's `rust-toolchain.toml`
-- Do not modify `crates/consensus/` or `crates/builder/` (no need for Plan B)
-- Do not introduce a new transaction type (we use Plan B: standard tx + precompile)
+- The AA transaction type (`0x76`, Plan A) is intentional — when adding a tx-variant
+  match arm, cover `Aa` (and `Deposit`) at every site rather than re-introducing a
+  `Plan B: no new tx type` assumption. New Base files/modifications for Plan A go in
+  Critical Rule #2 Group B with justification.
+- Do not modify `crates/consensus/` (the OP-derive / block-assembly consensus crate) or
+  `crates/builder/` beyond what Plan A's tx type strictly requires. (Note: the AA tx type
+  lives in `crates/common/consensus/`, a different crate; Plan A touches it deliberately.)
 - Do not import Tempo crates as git dependencies (copy + adapt instead)
 - Do not re-introduce the `alloy` umbrella crate as a workspace dep — Base uses
   individual `alloy-primitives` / `alloy-sol-types` / `alloy-consensus` crates.
