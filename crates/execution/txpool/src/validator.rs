@@ -430,6 +430,7 @@ mod tests {
         let inner = EthTransactionValidatorBuilder::new(client, evm_config)
             .no_shanghai()
             .no_cancun()
+            .with_custom_tx_type(base_common_consensus::SCI_AA_TX_TYPE_ID)
             .build(InMemoryBlobStore::default());
         let validator =
             BaseTransactionValidator::with_block_info(inner, BaseL1BlockInfo::default());

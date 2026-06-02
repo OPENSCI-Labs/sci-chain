@@ -65,6 +65,7 @@ members = [
   "sci/crates/precompile-abi",
   "sci/crates/revm-shim",
   "sci/crates/tempo-chainspec-shim",
+  "sci/tools/aa-txgen",
 ]
 default-members = [
   "bin/*",
