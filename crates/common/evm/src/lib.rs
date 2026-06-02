@@ -18,8 +18,8 @@ pub use l1block::L1BlockInfo;
 
 mod transaction;
 pub use transaction::{
-    BaseTransaction, BaseTransactionBuilder, BaseTransactionError, BaseTxTr, BuildError,
-    DEPOSIT_TRANSACTION_TYPE, DepositTransactionParts,
+    AaTransactionParts, BaseTransaction, BaseTransactionBuilder, BaseTransactionError, BaseTxTr,
+    BuildError, DEPOSIT_TRANSACTION_TYPE, DepositTransactionParts,
 };
 
 mod handler;
