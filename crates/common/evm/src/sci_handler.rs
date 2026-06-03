@@ -16,7 +16,7 @@ use alloc::{boxed::Box, format, vec::Vec};
 use revm::{
     bytecode::Bytecode,
     context_interface::{
-        Block, Cfg, ContextTr, JournalTr, LocalContextTr, Transaction,
+        Cfg, ContextTr, JournalTr, LocalContextTr, Transaction,
         result::{ExecutionResult, FromStringError},
     },
     handler::{
@@ -43,7 +43,7 @@ use sci_precompiles::{
 use crate::{
     L1BlockInfo, BaseHaltReason, BaseSpecId,
     handler::{IsTxError, BaseHandler},
-    transaction::{DEPOSIT_TRANSACTION_TYPE, BaseTransactionError, BaseTxTr},
+    transaction::{AaTransactionParts, DEPOSIT_TRANSACTION_TYPE, BaseTransactionError, BaseTxTr},
 };
 
 /// SCI Chain handler wrapping Base's [`BaseHandler`]. See module docs.
@@ -77,6 +77,112 @@ impl<EVM, ERROR, FRAME> SciHandler<EVM, ERROR, FRAME> {
         if refund > 0 {
             gas.record_refund(refund);
         }
+    }
+}
+
+impl<EVM, ERROR, FRAME> SciHandler<EVM, ERROR, FRAME>
+where
+    EVM: EvmTr<
+            Context: ContextTr<
+                Db: alloy_evm::Database,
+                Journal: JournalTr<State = EvmState, Database: alloy_evm::Database> + core::fmt::Debug,
+                Tx: BaseTxTr,
+                Cfg: revm::context_interface::Cfg<Spec = BaseSpecId>,
+                Chain = L1BlockInfo,
+            >,
+            Frame = FRAME,
+        >,
+    ERROR: EvmTrError<EVM> + From<BaseTransactionError> + FromStringError + IsTxError,
+    FRAME: FrameTr<FrameResult = FrameResult, FrameInit = FrameInit>,
+{
+    /// Runs an AA tx's `calls[]` batch atomically, executing each [`Call`] as its own
+    /// depth-0 frame via `run_frame`. The consensus path passes [`Handler::run_exec_loop`];
+    /// the tracing path passes [`InspectorHandler::inspect_run_exec_loop`] so debug traces
+    /// cover every call (not just the first). One outer journal checkpoint makes the batch
+    /// atomic — any call's failure reverts the whole batch. Gas threads across calls; the
+    /// returned [`FrameResult`] is the last call's, gas-normalized to the full tx limit.
+    fn execute_aa_batch(
+        &mut self,
+        evm: &mut EVM,
+        init_and_floor_gas: &InitialAndFloorGas,
+        aa: AaTransactionParts,
+        run_frame: fn(&mut Self, &mut EVM, FrameInit) -> Result<FrameResult, ERROR>,
+    ) -> Result<FrameResult, ERROR> {
+        let tx_gas_limit = evm.ctx().tx().gas_limit();
+        // The tx is signed by the session key (= TxEnv.caller); the batch executes as
+        // `root` when set, otherwise as the signer itself.
+        let signer = evm.ctx().tx().caller();
+        let caller = aa.root.unwrap_or(signer);
+
+        // One outer checkpoint makes the whole batch atomic.
+        let checkpoint = evm.ctx().journal_mut().checkpoint();
+        let mut remaining_gas = tx_gas_limit.saturating_sub(init_and_floor_gas.initial_gas);
+        let mut acc_refund: i64 = 0;
+        let mut final_result: Option<FrameResult> = None;
+
+        for call in &aa.calls {
+            // Build this call's depth-0 frame (mirrors revm's `create_init_frame` but with
+            // `caller` overridden to `root` and the per-call target/value/input).
+            let frame_init = {
+                let ctx = evm.ctx_mut();
+                let mut memory =
+                    SharedMemory::new_with_buffer(ctx.local().shared_memory_buffer().clone());
+                memory.set_memory_limit(ctx.cfg().memory_limit());
+                let frame_input = match call.to {
+                    TxKind::Call(target) => {
+                        let journal = ctx.journal_mut();
+                        let account = &journal.load_account_with_code(target)?.info;
+                        let known_bytecode = if let Some(Bytecode::Eip7702(eip)) = &account.code {
+                            let delegated = eip.delegated_address;
+                            let dacct = &journal.load_account_with_code(delegated)?.info;
+                            Some((dacct.code_hash(), dacct.code.clone().unwrap_or_default()))
+                        } else {
+                            Some((account.code_hash(), account.code.clone().unwrap_or_default()))
+                        };
+                        FrameInput::Call(Box::new(CallInputs {
+                            input: CallInput::Bytes(call.input.clone()),
+                            return_memory_offset: 0..0,
+                            gas_limit: remaining_gas,
+                            bytecode_address: target,
+                            known_bytecode,
+                            target_address: target,
+                            caller,
+                            value: CallValue::Transfer(call.value),
+                            scheme: CallScheme::Call,
+                            is_static: false,
+                        }))
+                    }
+                    TxKind::Create => FrameInput::Create(Box::new(CreateInputs::new(
+                        caller,
+                        CreateScheme::Create,
+                        call.value,
+                        call.input.clone(),
+                        remaining_gas,
+                    ))),
+                };
+                FrameInit { depth: 0, memory, frame_input }
+            };
+
+            let frame_result = run_frame(self, evm, frame_init)?;
+            let result = frame_result.interpreter_result().result;
+            if !result.is_ok() {
+                // Fail-fast: revert the whole batch, surface the failing call's result.
+                evm.ctx().journal_mut().checkpoint_revert(checkpoint);
+                let mut fr = frame_result;
+                // Revert refunds unused gas; halt consumes all gas.
+                let remaining = if result.is_revert() { fr.gas().remaining() } else { 0 };
+                Self::finalize_batch_gas(&mut fr, tx_gas_limit, remaining, 0);
+                return Ok(fr);
+            }
+            remaining_gas = frame_result.gas().remaining();
+            acc_refund = acc_refund.saturating_add(frame_result.gas().refunded());
+            final_result = Some(frame_result);
+        }
+
+        evm.ctx().journal_mut().checkpoint_commit();
+        let mut fr = final_result.expect("non-empty batch yields a result");
+        Self::finalize_batch_gas(&mut fr, tx_gas_limit, remaining_gas, acc_refund);
+        Ok(fr)
     }
 }
 
@@ -230,105 +336,23 @@ where
         self.inner.last_frame_result(evm, frame_result)
     }
 
-    /// Multi-call executor for SCI AA transactions (Plan A 2a).
+    /// Consensus (non-inspecting) execution path.
     ///
-    /// AA txs carry a batch (`aa` parts on the tx env); every other tx type has no `aa`
-    /// parts and delegates to the standard single-call execution. The batch runs
-    /// atomically: each [`Call`] executes as its own depth-0 frame with `msg.sender ==
-    /// root` (the signer when no root is set), wrapped in one journal checkpoint so any
-    /// call's failure rolls back the whole batch. Gas threads across calls; the returned
-    /// [`FrameResult`] is the last call's, with gas normalized to the full tx limit.
-    ///
-    /// NOTE: this is the non-inspector consensus path. The inspector (tracing) path still
-    /// falls back to single-call for AA — tracing parity is a follow-up.
+    /// AA txs (type `0x76`) carry a `calls[]` batch and run it atomically via
+    /// [`Self::execute_aa_batch`] using the standard [`Handler::run_exec_loop`]; every other
+    /// tx type has no `aa` parts and delegates to Base's single-call execution. The tracing
+    /// path mirrors this in [`InspectorHandler::inspect_execution`].
     fn execution(
         &mut self,
         evm: &mut Self::Evm,
         init_and_floor_gas: &InitialAndFloorGas,
     ) -> Result<FrameResult, Self::Error> {
-        let Some(aa) = evm.ctx().tx().aa_parts().cloned() else {
-            return self.inner.execution(evm, init_and_floor_gas);
-        };
-        if aa.calls.is_empty() {
-            // Defensive: txpool rejects empty batches; fall back rather than panic.
-            return self.inner.execution(evm, init_and_floor_gas);
-        }
-
-        let tx_gas_limit = evm.ctx().tx().gas_limit();
-        // The tx is signed by the session key (= TxEnv.caller); the batch executes as
-        // `root` when set, otherwise as the signer itself.
-        let signer = evm.ctx().tx().caller();
-        let caller = aa.root.unwrap_or(signer);
-
-        // One outer checkpoint makes the whole batch atomic.
-        let checkpoint = evm.ctx().journal_mut().checkpoint();
-        let mut remaining_gas = tx_gas_limit.saturating_sub(init_and_floor_gas.initial_gas);
-        let mut acc_refund: i64 = 0;
-        let mut final_result: Option<FrameResult> = None;
-
-        for call in &aa.calls {
-            // Build this call's depth-0 frame (mirrors revm's `create_init_frame` but with
-            // `caller` overridden to `root` and the per-call target/value/input).
-            let frame_init = {
-                let ctx = evm.ctx_mut();
-                let mut memory =
-                    SharedMemory::new_with_buffer(ctx.local().shared_memory_buffer().clone());
-                memory.set_memory_limit(ctx.cfg().memory_limit());
-                let frame_input = match call.to {
-                    TxKind::Call(target) => {
-                        let journal = ctx.journal_mut();
-                        let account = &journal.load_account_with_code(target)?.info;
-                        let known_bytecode = if let Some(Bytecode::Eip7702(eip)) = &account.code {
-                            let delegated = eip.delegated_address;
-                            let dacct = &journal.load_account_with_code(delegated)?.info;
-                            Some((dacct.code_hash(), dacct.code.clone().unwrap_or_default()))
-                        } else {
-                            Some((account.code_hash(), account.code.clone().unwrap_or_default()))
-                        };
-                        FrameInput::Call(Box::new(CallInputs {
-                            input: CallInput::Bytes(call.input.clone()),
-                            return_memory_offset: 0..0,
-                            gas_limit: remaining_gas,
-                            bytecode_address: target,
-                            known_bytecode,
-                            target_address: target,
-                            caller,
-                            value: CallValue::Transfer(call.value),
-                            scheme: CallScheme::Call,
-                            is_static: false,
-                        }))
-                    }
-                    TxKind::Create => FrameInput::Create(Box::new(CreateInputs::new(
-                        caller,
-                        CreateScheme::Create,
-                        call.value,
-                        call.input.clone(),
-                        remaining_gas,
-                    ))),
-                };
-                FrameInit { depth: 0, memory, frame_input }
-            };
-
-            let frame_result = self.run_exec_loop(evm, frame_init)?;
-            let result = frame_result.interpreter_result().result;
-            if !result.is_ok() {
-                // Fail-fast: revert the whole batch, surface the failing call's result.
-                evm.ctx().journal_mut().checkpoint_revert(checkpoint);
-                let mut fr = frame_result;
-                // Revert refunds unused gas; halt consumes all gas.
-                let remaining = if result.is_revert() { fr.gas().remaining() } else { 0 };
-                Self::finalize_batch_gas(&mut fr, tx_gas_limit, remaining, 0);
-                return Ok(fr);
+        match evm.ctx().tx().aa_parts().cloned().filter(|aa| !aa.calls.is_empty()) {
+            Some(aa) => {
+                self.execute_aa_batch(evm, init_and_floor_gas, aa, <Self as Handler>::run_exec_loop)
             }
-            remaining_gas = frame_result.gas().remaining();
-            acc_refund = acc_refund.saturating_add(frame_result.gas().refunded());
-            final_result = Some(frame_result);
+            None => self.inner.execution(evm, init_and_floor_gas),
         }
-
-        evm.ctx().journal_mut().checkpoint_commit();
-        let mut fr = final_result.expect("non-empty batch yields a result");
-        Self::finalize_batch_gas(&mut fr, tx_gas_limit, remaining_gas, acc_refund);
-        Ok(fr)
     }
 
     fn reimburse_caller(
@@ -457,4 +481,33 @@ where
     ERROR: EvmTrError<EVM> + From<BaseTransactionError> + FromStringError + IsTxError,
 {
     type IT = EthInterpreter;
+
+    /// Tracing execution path — mirror of [`Handler::execution`] so `debug_trace*` covers an
+    /// AA tx's whole `calls[]` batch (not just the first call). AA txs run the batch via
+    /// [`Self::execute_aa_batch`] with the inspecting [`InspectorHandler::inspect_run_exec_loop`];
+    /// every other tx type takes the default single-frame inspector path.
+    fn inspect_execution(
+        &mut self,
+        evm: &mut Self::Evm,
+        init_and_floor_gas: &InitialAndFloorGas,
+    ) -> Result<FrameResult, Self::Error> {
+        if let Some(aa) =
+            evm.ctx().tx().aa_parts().cloned().filter(|aa| !aa.calls.is_empty())
+        {
+            return self.execute_aa_batch(
+                evm,
+                init_and_floor_gas,
+                aa,
+                <Self as InspectorHandler>::inspect_run_exec_loop,
+            );
+        }
+
+        // Default single-frame inspector path (non-AA / empty batch), matching the trait's
+        // built-in `inspect_execution`.
+        let gas_limit = evm.ctx().tx().gas_limit() - init_and_floor_gas.initial_gas;
+        let first_frame_input = self.first_frame_input(evm, gas_limit)?;
+        let mut frame_result = self.inspect_run_exec_loop(evm, first_frame_input)?;
+        self.last_frame_result(evm, &mut frame_result)?;
+        Ok(frame_result)
+    }
 }
