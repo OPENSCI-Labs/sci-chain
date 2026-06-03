@@ -1,4 +1,4 @@
-use core::fmt::Debug;
+use core::{any::Any, fmt::Debug};
 use std::{
     borrow::Cow,
     sync::{Arc, OnceLock},
@@ -12,7 +12,7 @@ use alloy_eips::{
     eip7702::SignedAuthorization,
 };
 use alloy_primitives::{Address, B256, Bytes, TxHash, TxKind, U256};
-use base_common_consensus::BaseTransactionSigned;
+use base_common_consensus::{BaseAaTransaction, BaseTransactionSigned, BaseTxEnvelope};
 use c_kzg::KzgSettings;
 use reth_primitives_traits::{InMemorySize, SignedTransaction};
 use reth_transaction_pool::{
@@ -20,6 +20,52 @@ use reth_transaction_pool::{
 };
 
 use crate::estimated_da_size::DataAvailabilitySized;
+
+/// Accessor that lets generic pool code reach the [`BaseAaTransaction`] body of a
+/// consensus transaction without a concrete downcast.
+///
+/// Implemented for [`BaseTxEnvelope`] (the only `Cons` the pool instantiates); generic
+/// `BasePooledTransaction<Cons, _>` code bounds `Cons: AaTx` to read AA-specific fields
+/// (`fee_payer` / `root` / per-call values) needed for fundless-signer pool accounting.
+pub trait AaTx {
+    /// Returns the SCI AA (type `0x76`) transaction body, or `None` for any other type.
+    fn as_aa(&self) -> Option<&BaseAaTransaction>;
+
+    /// Returns the pool `cost` the **signer** must cover, if this is an AA transaction
+    /// (`None` for any other type → reth's default cost applies).
+    ///
+    /// Plan A: an AA tx's gas may be sponsored by `fee_payer` and its call values moved from
+    /// `root` (when the calls execute as `root`), so the signing session key only owes what
+    /// `SciHandler` will actually charge it. Mirroring that here keeps reth's admission check
+    /// and its per-block balance maintenance consistent — a fully-sponsored fundless signer
+    /// gets `cost == 0` and stays pending instead of being rejected/evicted.
+    fn aa_signer_pool_cost(&self, signer: Address) -> Option<U256> {
+        self.as_aa().map(|aa| {
+            let signer_pays_gas = aa.fee_payer.is_none() || aa.fee_payer == Some(signer);
+            let signer_pays_value = aa.root.is_none() || aa.root == Some(signer);
+            let mut cost = U256::ZERO;
+            if signer_pays_gas {
+                cost = cost.saturating_add(
+                    U256::from(aa.max_fee_per_gas).saturating_mul(U256::from(aa.gas_limit)),
+                );
+            }
+            if signer_pays_value {
+                cost = aa.calls.iter().fold(cost, |acc, c| acc.saturating_add(c.value));
+            }
+            cost
+        })
+    }
+}
+
+// Blanket impl over every pool consensus type. Only `BaseTxEnvelope` actually carries an AA
+// variant, resolved by a runtime downcast — so the `Cons: AaTx` bound on the pool impls is
+// satisfied for any `SignedTransaction` without rippling the bound through Base's generic
+// RPC/payload/builder code (which instantiates the pool over an abstract tx type).
+impl<T: SignedTransaction + 'static> AaTx for T {
+    fn as_aa(&self) -> Option<&BaseAaTransaction> {
+        (self as &dyn Any).downcast_ref::<BaseTxEnvelope>().and_then(BaseTxEnvelope::as_aa)
+    }
+}
 
 /// Assumed L2 block time in seconds, used to convert block-based bundle windows
 /// to time-based bounds.
@@ -75,11 +121,26 @@ pub struct BasePooledTransaction<
     max_timestamp: Option<u64>,
 }
 
-impl<Cons: SignedTransaction, Pooled> BasePooledTransaction<Cons, Pooled> {
+impl<Cons: SignedTransaction + AaTx, Pooled> BasePooledTransaction<Cons, Pooled> {
+    /// Builds the inner [`EthPooledTransaction`], overriding its `cost` for AA transactions
+    /// so the pool charges the *signer* only what it actually owes (see
+    /// [`AaTx::aa_signer_pool_cost`]).
+    fn build_inner(
+        transaction: Recovered<Cons>,
+        encoded_length: usize,
+    ) -> EthPooledTransaction<Cons> {
+        let cost_override = transaction.aa_signer_pool_cost(transaction.signer());
+        let mut inner = EthPooledTransaction::new(transaction, encoded_length);
+        if let Some(cost) = cost_override {
+            inner.cost = cost;
+        }
+        inner
+    }
+
     /// Create new instance of [Self].
     pub fn new(transaction: Recovered<Cons>, encoded_length: usize) -> Self {
         Self {
-            inner: EthPooledTransaction::new(transaction, encoded_length),
+            inner: Self::build_inner(transaction, encoded_length),
             estimated_tx_compressed_size: Default::default(),
             _pd: core::marker::PhantomData,
             encoded_2718: Default::default(),
@@ -99,7 +160,7 @@ impl<Cons: SignedTransaction, Pooled> BasePooledTransaction<Cons, Pooled> {
         received_at: u128,
     ) -> Self {
         Self {
-            inner: EthPooledTransaction::new(transaction, encoded_length),
+            inner: Self::build_inner(transaction, encoded_length),
             estimated_tx_compressed_size: Default::default(),
             _pd: core::marker::PhantomData,
             encoded_2718: Default::default(),
@@ -109,7 +170,9 @@ impl<Cons: SignedTransaction, Pooled> BasePooledTransaction<Cons, Pooled> {
             max_timestamp: None,
         }
     }
+}
 
+impl<Cons: SignedTransaction, Pooled> BasePooledTransaction<Cons, Pooled> {
     /// Sets bundle metadata on this transaction, returning the modified instance.
     pub const fn with_bundle_metadata(
         mut self,
@@ -154,7 +217,7 @@ impl<Cons: SignedTransaction, Pooled> DataAvailabilitySized
 
 impl<Cons, Pooled> PoolTransaction for BasePooledTransaction<Cons, Pooled>
 where
-    Cons: SignedTransaction + From<Pooled>,
+    Cons: SignedTransaction + From<Pooled> + AaTx,
     Pooled: SignedTransaction + TryFrom<Cons, Error: core::error::Error>,
 {
     type TryFromConsensusError = <Pooled as TryFrom<Cons>>::Error;
@@ -288,7 +351,7 @@ where
 
 impl<Cons, Pooled> EthPoolTransaction for BasePooledTransaction<Cons, Pooled>
 where
-    Cons: SignedTransaction + From<Pooled>,
+    Cons: SignedTransaction + From<Pooled> + AaTx,
     Pooled: SignedTransaction + TryFrom<Cons>,
     <Pooled as TryFrom<Cons>>::Error: core::error::Error,
 {
@@ -324,16 +387,26 @@ where
 pub trait BasePooledTx: PoolTransaction + DataAvailabilitySized {
     /// Returns the EIP-2718 encoded bytes of the transaction.
     fn encoded_2718(&self) -> Cow<'_, Bytes>;
+
+    /// Returns the SCI AA (type `0x76`) transaction body, or `None` for any other type.
+    ///
+    /// Lets the txpool validator reach AA-specific fields (`fee_payer` / `root`) through
+    /// the generic pool-transaction type for fundless-signer admission accounting.
+    fn aa(&self) -> Option<&BaseAaTransaction>;
 }
 
 impl<Cons, Pooled> BasePooledTx for BasePooledTransaction<Cons, Pooled>
 where
-    Cons: SignedTransaction + From<Pooled>,
+    Cons: SignedTransaction + From<Pooled> + AaTx,
     Pooled: SignedTransaction + TryFrom<Cons>,
     <Pooled as TryFrom<Cons>>::Error: core::error::Error,
 {
     fn encoded_2718(&self) -> Cow<'_, Bytes> {
         Cow::Borrowed(self.encoded_2718())
+    }
+
+    fn aa(&self) -> Option<&BaseAaTransaction> {
+        self.inner.transaction().as_aa()
     }
 }
 

@@ -12,7 +12,7 @@ pub use validator::{BaseL1BlockInfo, BaseTransactionValidator, BaseTxPoolError};
 
 mod transaction;
 pub use transaction::{
-    BLOCK_TIME_SECS, BasePooledTransaction, BasePooledTx, BundleTransaction,
+    AaTx, BLOCK_TIME_SECS, BasePooledTransaction, BasePooledTx, BundleTransaction,
     MAX_BUNDLE_ADVANCE_BLOCKS, MAX_BUNDLE_ADVANCE_MILLIS, MAX_BUNDLE_ADVANCE_SECS,
     TimestampedTransaction, unix_time_millis,
 };

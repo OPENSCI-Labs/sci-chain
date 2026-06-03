@@ -496,6 +496,14 @@ impl BaseTxEnvelope {
         }
     }
 
+    /// Returns the [`BaseAaTransaction`] variant if the transaction is an SCI AA transaction.
+    pub const fn as_aa(&self) -> Option<&BaseAaTransaction> {
+        match self {
+            Self::Aa(tx) => Some(tx.tx()),
+            _ => None,
+        }
+    }
+
     /// Return the reference to signature.
     ///
     /// Returns `None` if this is a deposit variant.
