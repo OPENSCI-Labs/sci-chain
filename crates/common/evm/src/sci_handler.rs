@@ -17,7 +17,7 @@ use revm::{
     bytecode::Bytecode,
     context_interface::{
         Block, Cfg, ContextTr, JournalTr, LocalContextTr, Transaction,
-        result::{ExecutionResult, FromStringError},
+        result::{ExecutionResult, FromStringError, InvalidTransaction},
     },
     handler::{
         EthFrame, EvmTr, FrameResult, Handler,
@@ -230,11 +230,13 @@ where
         let root = evm.ctx().tx().aa_parts().and_then(|a| a.root);
         let raw_fee_payer = evm.ctx().tx().aa_parts().and_then(|a| a.fee_payer);
         if raw_fee_payer.is_some() && raw_fee_payer != root {
-            return Err(ERROR::from_string(
+            // InvalidTransaction (not from_string/Custom) so the builder skips this tx rather
+            // than treating it as a fatal payload-build error (which wedges block production).
+            return Err(ERROR::from(InvalidTransaction::Str(
                 "AA fee_payer must equal root (sponsored gas is authorized via the keychain on \
                  the root account)"
                     .into(),
-            ));
+            )));
         }
         let fee_payer = raw_fee_payer.filter(|fp| *fp != signer);
 

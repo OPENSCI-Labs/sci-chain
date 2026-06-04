@@ -13,7 +13,10 @@ use std::collections::HashMap;
 use revm::{
     bytecode::Bytecode,
     context::journaled_state::account::JournaledAccountTr,
-    context_interface::{Cfg, ContextTr, Database, JournalTr, Transaction, result::FromStringError},
+    context_interface::{
+        Cfg, ContextTr, Database, JournalTr, Transaction,
+        result::{FromStringError, InvalidTransaction},
+    },
     handler::EvmTr,
     primitives::TxKind,
 };
@@ -58,7 +61,9 @@ const DEPOSIT_TX_TYPE: u8 = 0x7E;
 pub fn run_pre_execution_hook<EVM, ERROR>(evm: &mut EVM) -> Result<HookOutcome<ERROR>, ERROR>
 where
     EVM: EvmTr<Context: ContextTr<Db: AlloyDatabase, Journal: JournalTr<Database: AlloyDatabase> + Debug>>,
-    ERROR: From<<<EVM::Context as ContextTr>::Db as Database>::Error> + FromStringError,
+    ERROR: From<<<EVM::Context as ContextTr>::Db as Database>::Error>
+        + FromStringError
+        + From<InvalidTransaction>,
 {
     // ----- 0. Defensive deposit-tx skip (primary gate is in SciHandler). -----
     if evm.ctx().tx().tx_type() == DEPOSIT_TX_TYPE {
@@ -197,8 +202,11 @@ where
             // Hook rejected — discard everything we wrote since the checkpoint so a
             // partial multi-call batch doesn't leak quota deductions.
             evm.ctx().journal_mut().checkpoint_revert(checkpoint);
-            Ok(HookOutcome::Reject(ERROR::from_string(format!(
-                "SCI hook rejected tx: {e:?}",
+            // Build an InvalidTransaction (not a generic `from_string`/Custom) so the block
+            // builder classifies this as a skippable invalid tx (`as_invalid_tx_err`) rather
+            // than a fatal EVM error that aborts the whole payload — see run_aa_keychain_hook.
+            Ok(HookOutcome::Reject(ERROR::from(InvalidTransaction::Str(
+                format!("SCI hook rejected tx: {e:?}").into(),
             ))))
         }
     }
@@ -246,7 +254,9 @@ pub fn run_aa_keychain_hook<EVM, ERROR>(
 ) -> Result<HookOutcome<ERROR>, ERROR>
 where
     EVM: EvmTr<Context: ContextTr<Db: AlloyDatabase, Journal: JournalTr<Database: AlloyDatabase> + Debug>>,
-    ERROR: From<<<EVM::Context as ContextTr>::Db as Database>::Error> + FromStringError,
+    ERROR: From<<<EVM::Context as ContextTr>::Db as Database>::Error>
+        + FromStringError
+        + From<InvalidTransaction>,
 {
     // Set tx_origin (mirrors the Plan B hook) so keychain admin ops invoked within the
     // batch see a non-zero origin, and reset the transaction_key transient slot.
@@ -264,8 +274,14 @@ where
     })
     .map_err(|e| ERROR::from_string(format!("keychain probe failed: {e:?}")))?;
     if !is_active {
-        return Ok(HookOutcome::Reject(ERROR::from_string(format!(
-            "AA tx unauthorized: session key {session_key:?} has no active keychain key for root {root:?}",
+        // InvalidTransaction (not Custom) so the builder skips this tx instead of treating
+        // it as a fatal payload-build error (which would wedge block production while the
+        // rejected AA tx sits in the local-only pool and is retried every flashblock).
+        return Ok(HookOutcome::Reject(ERROR::from(InvalidTransaction::Str(
+            format!(
+                "AA tx unauthorized: session key {session_key:?} has no active keychain key for root {root:?}",
+            )
+            .into(),
         ))));
     }
 
@@ -333,8 +349,10 @@ where
         }
         Err(e) => {
             evm.ctx().journal_mut().checkpoint_revert(checkpoint);
-            Ok(HookOutcome::Reject(ERROR::from_string(format!(
-                "SCI AA keychain hook rejected tx: {e:?}",
+            // InvalidTransaction (not Custom) — keeps the builder skipping this rejected AA
+            // tx instead of aborting the whole flashblock (CB-tripped / over-limit / scope).
+            Ok(HookOutcome::Reject(ERROR::from(InvalidTransaction::Str(
+                format!("SCI AA keychain hook rejected tx: {e:?}").into(),
             ))))
         }
     }
@@ -359,7 +377,9 @@ where
 pub fn apply_post_execution_deductions<EVM, ERROR>(evm: &mut EVM) -> Result<(), ERROR>
 where
     EVM: EvmTr<Context: ContextTr<Db: AlloyDatabase, Journal: JournalTr<Database: AlloyDatabase> + Debug>>,
-    ERROR: From<<<EVM::Context as ContextTr>::Db as Database>::Error> + FromStringError,
+    ERROR: From<<<EVM::Context as ContextTr>::Db as Database>::Error>
+        + FromStringError
+        + From<InvalidTransaction>,
 {
     // Read the keychain's transient `transaction_key` first — set to the session key by
     // the pre-execution hook iff it already verified the 7702 delegation and active key.
@@ -427,7 +447,9 @@ pub fn apply_aa_post_execution_deductions<EVM, ERROR>(
 ) -> Result<(), ERROR>
 where
     EVM: EvmTr<Context: ContextTr<Db: AlloyDatabase, Journal: JournalTr<Database: AlloyDatabase> + Debug>>,
-    ERROR: From<<<EVM::Context as ContextTr>::Db as Database>::Error> + FromStringError,
+    ERROR: From<<<EVM::Context as ContextTr>::Db as Database>::Error>
+        + FromStringError
+        + From<InvalidTransaction>,
 {
     enter_keychain_storage(evm.ctx(), || -> crate::error::Result<()> {
         let mut kc = AccountKeychain::default();
