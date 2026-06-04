@@ -113,8 +113,11 @@ defined off-chain capability handoff. Option C is an additive layer over B — n
 the B execution path.
 
 Implementation under B: `SciAgentRegistrar` drops the `IDAMintRequested` stub (no IDA
-contract in v1); `agentId` documented as off-chain. The Phase 6 agent-loop e2e uses a plain
-keychain root account (= today's devnet AA repro).
+contract in v1); `agentId` documented as off-chain. Note the `SciAgentRegistrar.registerAgent`
+one-step helper only works under EIP-7702 delegation (it authorizes via `msg.sender`); under
+Option B (no 7702) registration is the **root account directly calling `keychain.authorizeKey`**
+(+ optional `registry.bindKey`). The Phase 6 agent-loop e2e uses a plain keychain root account
+(= today's devnet AA repro) — see `plan-a-aa-e2e.md`.
 
 ## Open questions for sign-off
 
