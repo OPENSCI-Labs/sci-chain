@@ -7,11 +7,19 @@ import { IAgentAccessKeyRegistry } from "../interfaces/IAgentAccessKeyRegistry.s
 /// @title  SciAgentRegistrar
 /// @notice One-step agent registration helper (ERC-8004 inspired). The root account
 ///         calls `registerAgent` once to: (1) authorize a new session key on the
-///         keychain, and (2) bind that key to an off-chain agent identifier in the
-///         `AgentAccessKeyRegistry`. The IDA NFT mint is left as a stub and emitted
-///         as an event for follow-up wiring once the IDA contract lands.
+///         keychain, and (2) bind that key to an agent identifier in the
+///         `AgentAccessKeyRegistry`.
 ///
-/// @dev    Not a fixed-address predeploy. Deployed by the genesis script or by a
+/// @dev    Registration model: **Option B** (see
+///         `sci/docs/agent-registration-path-decision.md`). The agent's identity is
+///         the off-chain `agentId` (a DID / ERC-8004 record resolved by the gateway);
+///         there is no on-chain IDA NFT and no ERC-6551 token-bound account in v1.
+///         The agent's operable account is a plain keychain root account, and agent
+///         identity is NOT transferable — operator keys rotate via the keychain
+///         (`authorizeKey`/`revokeKey`) instead. If a transferable on-chain identity
+///         NFT (Option C) is later required, re-introduce a mint hook here.
+///
+///         Not a fixed-address predeploy. Deployed by the genesis script or by a
 ///         deployer key during devnet bootstrap; the registry address is taken in
 ///         the constructor and the keychain address is the precompile constant.
 contract SciAgentRegistrar {
@@ -25,7 +33,6 @@ contract SciAgentRegistrar {
         bytes32 indexed agentId,
         uint8 signatureType
     );
-    event IDAMintRequested(address indexed account, bytes32 indexed agentId, address indexed keyId);
 
     constructor(address registryAddress) {
         registry = IAgentAccessKeyRegistry(registryAddress);
@@ -44,6 +51,5 @@ contract SciAgentRegistrar {
         registry.bindKey(keyId, agentId);
 
         emit AgentRegistered(msg.sender, keyId, agentId, uint8(signatureType));
-        emit IDAMintRequested(msg.sender, agentId, keyId);
     }
 }
