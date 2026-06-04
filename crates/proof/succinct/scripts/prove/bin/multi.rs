@@ -24,7 +24,10 @@ use base_proof_succinct_proof_utils::{
 use base_proof_succinct_prove::execute_multi;
 use base_proof_succinct_scripts::HostExecutorArgs;
 use clap::Parser;
-use sp1_sdk::{Elf, ProveRequest, Prover, utils};
+use sp1_sdk::{
+    Elf, ProveRequest, Prover, utils,
+    blocking::{CpuProver, ProveRequest as BlockingProveRequest, Prover as BlockingProver},
+};
 use tracing::{debug, info, warn};
 
 /// Execute the Succinct program for multiple blocks.
@@ -105,6 +108,23 @@ async fn main() -> Result<()> {
             let proof = cluster_range_proof(args.cluster_timeout, sp1_stdin).await?;
             let path = save_range_proof(l2_chain_id, l2_start_block, l2_end_block, &proof)?;
             info!("Range proof saved to {}", path.display());
+        } else if env::var("SP1_PROVER").as_deref() == Ok("cpu") {
+            // Local CPU compressed proof — no prover network/cluster required (SP1_PROVER=cpu).
+            // CpuProver is synchronous and CPU-bound, so run it on a blocking thread to keep
+            // the async runtime responsive; errors propagate through the JoinHandle via await??.
+            let prove_start = Instant::now();
+            let proof = tokio::task::spawn_blocking(move || -> Result<_> {
+                let prover = CpuProver::new();
+                let pk = BlockingProver::setup(&prover, Elf::Static(get_range_elf_embedded()))
+                    .map_err(|e| anyhow::anyhow!("range ELF setup failed: {e:?}"))?;
+                let req = BlockingProver::prove(&prover, &pk, sp1_stdin);
+                BlockingProveRequest::run(BlockingProveRequest::compressed(req))
+                    .map_err(|e| anyhow::anyhow!("CPU compressed proving failed: {e:?}"))
+            })
+            .await??;
+            info!(elapsed = ?prove_start.elapsed(), "CPU compressed proof generated");
+            let path = save_range_proof(l2_chain_id, l2_start_block, l2_end_block, &proof)?;
+            info!("CPU compressed range proof saved to {}", path.display());
         } else {
             let range_proof_strategy = parse_fulfillment_strategy(
                 env::var("RANGE_PROOF_STRATEGY").unwrap_or_else(|_| "reserved".to_string()),
