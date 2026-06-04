@@ -16,7 +16,7 @@ use alloc::{boxed::Box, format, vec::Vec};
 use revm::{
     bytecode::Bytecode,
     context_interface::{
-        Cfg, ContextTr, JournalTr, LocalContextTr, Transaction,
+        Block, Cfg, ContextTr, JournalTr, LocalContextTr, Transaction,
         result::{ExecutionResult, FromStringError},
     },
     handler::{
@@ -248,14 +248,33 @@ where
                 // the signer's starting balance — return any excess, or cover any shortfall
                 // (e.g. the L1 cost that exceeded the pre-funded gas) from fee_payer — so the
                 // signer nets exactly zero and fee_payer bears the full effective cost.
-                let max_gas = {
-                    let (_block, tx, _cfg, _journal, _chain, _local) = evm.ctx().all_mut();
-                    tx.max_balance_spending()
-                        .map_err(|e| ERROR::from_string(format!("max gas overflow: {e:?}")))?
+                // Pre-fund the signer with the FULL amount Base's inner deduct requires it
+                // to hold: the max L2 gas (`gas_limit * max_fee`; AA value is 0) PLUS the
+                // L1 data / operator `additional_cost`. The inner deduct first subtracts
+                // `additional_cost` (L1 + operator fee — see `handler.rs::tx_cost_with_tx`),
+                // then `ensure_enough_balance` checks the *remaining* balance still covers
+                // `max_balance_spending`. A funded signer's own balance absorbs the L1
+                // portion and the reconcile below claws it back, but a truly 0-balance
+                // signer underflows here before the reconcile runs — so it must be
+                // pre-funded for BOTH. We mirror the inner's `L1BlockInfo` fetch (and cache
+                // it on `chain`) so `tx_cost_with_tx` yields exactly the `additional_cost`
+                // the inner will charge, keeping the reconcile delta to the unused-gas
+                // remainder only.
+                let prefund = {
+                    let (block, tx, cfg, journal, chain, _local) = evm.ctx().all_mut();
+                    let spec = cfg.spec();
+                    if chain.l2_block != Some(block.number()) {
+                        *chain = L1BlockInfo::try_fetch(journal.db_mut(), block.number(), spec)?;
+                    }
+                    let max_gas = tx
+                        .max_balance_spending()
+                        .map_err(|e| ERROR::from_string(format!("max gas overflow: {e:?}")))?;
+                    let additional_cost = chain.tx_cost_with_tx(tx, spec).unwrap_or(U256::ZERO);
+                    max_gas.saturating_add(additional_cost)
                 };
                 let signer_before =
                     evm.ctx().journal_mut().load_account(signer)?.data.info.balance;
-                if let Some(err) = evm.ctx().journal_mut().transfer(fp, signer, max_gas)? {
+                if let Some(err) = evm.ctx().journal_mut().transfer(fp, signer, prefund)? {
                     return Err(ERROR::from_string(format!(
                         "fee_payer {fp:?} cannot cover gas: {err:?}"
                     )));
