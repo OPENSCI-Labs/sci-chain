@@ -5,6 +5,16 @@ import { IAccountKeychain } from "../interfaces/IAccountKeychain.sol";
 import { ISCIAgentDelegator } from "../interfaces/ISCIAgentDelegator.sol";
 
 /// @title  SCIAgentDelegator
+/// @notice **Plan B (legacy) compatibility layer — NOT on the Plan A hot path.**
+///         Under Plan A (native AA tx type `0x76`), the agent's batch rides the tx
+///         itself as `BaseAaTransaction.calls[]` and is executed atomically by the
+///         Rust handler (`SciHandler::execute_aa_batch`) with the keychain checks
+///         applied pre-execution — there is no EIP-7702 delegation and no call into
+///         this contract. This predeploy is retained only for the Plan B path
+///         (standard EIP-1559 tx + EIP-7702 delegation to this address) so existing
+///         tooling/tests that pre-date the AA tx type still function. New agent
+///         flows should use the AA tx type and bypass it entirely.
+///
 /// @notice EIP-7702 batch executor predeploy at 0xCCCC..0001. An agent root account
 ///         delegates here via EIP-7702; the agent's session key signs a tx to the root
 ///         account with `tx.input = execute(Call[])`. Two gates protect the call:

@@ -12,6 +12,14 @@ import { IAccountKeychain } from "../../src/interfaces/IAccountKeychain.sol";
 import { ISCIAgentDelegator } from "../../src/interfaces/ISCIAgentDelegator.sol";
 
 /// @title  AgentTxLoop.s.sol
+/// @notice **Plan B (legacy) flow.** Exercises the agent loop via the EIP-7702
+///         path: register → 7702-delegate → `ISCIAgentDelegator.execute(calls)` →
+///         trip → execute (rejected) → untrip → execute. Under Plan A the same
+///         loop is driven WITHOUT 7702/delegator: `authorizeKey` then a native AA
+///         tx (type `0x76`) carrying `calls[]`, submitted via the `sci-aa-txgen`
+///         tool + `eth_sendRawTransaction` (a forge script cannot emit the custom
+///         AA tx type). The AA-flow end-to-end is the Phase 6 devnet exercise —
+///         see the repro in `sci/docs/test/plan-a-status.md` and `sci/devnet/`.
 /// @notice Live-broadcast end-to-end exercise of the SCI pre-execution hook
 ///         (CircuitBreaker → Scope → SpendingLimit). Drives the full
 ///         register → 7702-delegate → execute → trip → execute (rejected) →

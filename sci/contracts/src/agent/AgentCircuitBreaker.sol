@@ -11,6 +11,13 @@ import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
 ///         precompile's `tripKey/untripKey`. The precompile permits exactly this
 ///         contract's address as caller for those mutators; the contract enforces a
 ///         two-tier access model (owner + arbitrary guardians) on top.
+///
+/// @dev    Plan A enforcement: a trip set here is checked by the pre-execution
+///         keychain hook (`run_aa_keychain_hook`) for every AA tx (type `0x76`) —
+///         a tripped session key's batch is rejected before execution, in addition
+///         to the legacy Plan B hook path. Trip/untrip state lives in the
+///         `SciAgentState` precompile (indexed by session key), so the gate applies
+///         uniformly across both tx paths.
 contract AgentCircuitBreaker is IAgentCircuitBreaker, Ownable {
     /// Address of the `SciAgentState` precompile.
     address internal constant SCI_AGENT_STATE = 0xAaAAAaAA00000000000000000000000000000001;

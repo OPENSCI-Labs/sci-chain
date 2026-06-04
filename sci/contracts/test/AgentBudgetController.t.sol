@@ -32,6 +32,20 @@ contract AgentBudgetControllerTest is Test {
         assertEq(periodEnd, 0);
     }
 
+    function test_GasBudgetReadsNativeSentinel() public {
+        // Plan A D-gas: the address(0) sentinel meters native value + gas.
+        MockAccountKeychain(KEYCHAIN).setRemainingLimit(
+            rootAccount, sessionKey, budget.GAS_TOKEN(), 7 ether, 4242
+        );
+        (uint256 amt, uint64 periodEnd) = budget.gasBudget(rootAccount, sessionKey);
+        assertEq(amt, 7 ether);
+        assertEq(periodEnd, 4242);
+        // gasBudget(...) is exactly remaining(..., address(0)).
+        (uint256 amt2, uint64 periodEnd2) = budget.remaining(rootAccount, sessionKey, address(0));
+        assertEq(amt2, amt);
+        assertEq(periodEnd2, periodEnd);
+    }
+
     function test_SetAndGetThreshold() public {
         vm.prank(rootAccount);
         budget.setThreshold(sessionKey, TOKEN, 10 ether);
