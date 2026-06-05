@@ -26,4 +26,5 @@ mod hook;
 
 pub use hook::{
     AaCall, HookOutcome, apply_aa_post_execution_deductions, run_aa_keychain_hook,
+    set_keychain_tx_origin,
 };

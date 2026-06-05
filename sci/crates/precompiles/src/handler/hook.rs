@@ -12,7 +12,7 @@ use alloy_primitives::{Address, U256};
 use std::collections::HashMap;
 use revm::{
     context_interface::{
-        Cfg, ContextTr, Database, JournalTr,
+        Cfg, ContextTr, Database, JournalTr, Transaction,
         result::{FromStringError, InvalidTransaction},
     },
     handler::EvmTr,
@@ -48,6 +48,32 @@ pub struct AaCall {
     pub value: U256,
     /// Calldata forwarded to the call.
     pub input: Vec<u8>,
+}
+
+/// Sets the keychain's transient `tx_origin` slot to the tx signer (and resets the
+/// `transaction_key` slot) for a non-agent tx.
+///
+/// Tempo's handler does this unconditionally for every non-deposit tx so that keychain
+/// admin operations (`authorizeKey` / `revokeKey` / `tripKey` / ...) invoked by a plain
+/// tx see a non-zero `tx.origin` and pass the T2+ `ensure_admin_caller` check. AA agent
+/// txs get the equivalent setup inside [`run_aa_keychain_hook`]; this covers every other
+/// (non-agent) tx so a user calling the keychain directly still works.
+pub fn set_keychain_tx_origin<EVM, ERROR>(evm: &mut EVM) -> Result<(), ERROR>
+where
+    EVM: EvmTr<Context: ContextTr<Db: AlloyDatabase, Journal: JournalTr<Database: AlloyDatabase> + Debug>>,
+    ERROR: From<<<EVM::Context as ContextTr>::Db as Database>::Error>
+        + FromStringError
+        + From<InvalidTransaction>,
+{
+    let caller = evm.ctx().tx().caller();
+    enter_keychain_storage(evm.ctx(), || -> crate::error::Result<()> {
+        let mut kc = AccountKeychain::default();
+        kc.set_tx_origin(caller)?;
+        kc.set_transaction_key(alloy_primitives::Address::ZERO)?;
+        Ok(())
+    })
+    .map_err(|e| ERROR::from_string(format!("keychain tx_origin setup failed: {e:?}")))?;
+    Ok(())
 }
 
 /// AA-native keychain pre-execution hook (Plan A 2c) — the authorization gate.

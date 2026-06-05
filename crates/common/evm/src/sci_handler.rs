@@ -38,6 +38,7 @@ use revm::{
 
 use sci_precompiles::{
     AaCall, HookOutcome, apply_aa_post_execution_deductions, run_aa_keychain_hook,
+    set_keychain_tx_origin,
 };
 
 use crate::{
@@ -342,8 +343,10 @@ where
                     HookOutcome::Reject(err) => Err(err),
                 }
             }
-            // Non-agent traffic (non-AA tx, or AA tx without `root`): no keychain gate.
-            _ => Ok(()),
+            // Non-agent traffic (non-AA tx, or AA tx without `root`): no keychain gate,
+            // but still set the keychain's tx_origin so a plain tx calling the keychain
+            // directly (authorizeKey/revokeKey/...) passes the T2+ ensure_admin_caller check.
+            _ => set_keychain_tx_origin::<EVM, ERROR>(evm),
         }
     }
 
