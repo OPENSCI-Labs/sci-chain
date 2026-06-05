@@ -3,12 +3,11 @@
 **Date:** 2026-06-04. **Branch:** `feat/plan-a-aa-keychain`. **Registration model:** Option B
 (see `agent-registration-path-decision.md`).
 
-This is the AA-transaction-flow analogue of the legacy `sci/devnet/E2E.md` (which used EIP-7702
-+ `SCIAgentDelegator`). Under Plan A the agent batch rides a native `0x76` transaction and the
-keychain checks run pre-execution in the EL — there is **no 7702 delegation and no
-`delegator.execute`**. The agent's root is a plain keychain account; registration is the root
-directly calling `keychain.authorizeKey` (the `SciAgentRegistrar` one-step helper only works
-under 7702 and is not used here).
+Under Plan A the agent batch rides a native `0x76` transaction and the keychain checks run
+pre-execution in the EL — there is **no EIP-7702 delegation and no delegator contract** (the
+Plan B `SCIAgentDelegator` / `SciAgentRegistrar` path has been removed from this branch). The
+agent's root is a plain keychain account; registration is the root directly calling
+`keychain.authorizeKey`. The runnable scripts for this flow live in `sci/devnet/e2e/`.
 
 ## Prerequisites
 

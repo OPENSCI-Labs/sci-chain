@@ -1,5 +1,14 @@
 # Decision Memo: Agent On-Chain Registration Path (ERC-8004 + ERC-6551 vs. Plan A keychain)
 
+> **Update (2026-06-05):** the `SciAgentRegistrar` contract has been **removed** from this
+> branch along with the rest of the Plan B layer. Its `registerAgent` one-step helper only
+> worked under EIP-7702 (it authorizes via `msg.sender`), which Plan A does not use. Option B
+> registration is therefore implemented directly: the root account calls
+> `keychain.authorizeKey` and (optionally) `registry.bindKey` itself — exactly the Phase 6
+> e2e flow in `plan-a-aa-e2e.md`. The comparison below is retained as the original decision
+> rationale; read "`SciAgentRegistrar`" in it as "the one-step registration shape", now done
+> by direct calls rather than a helper contract.
+
 **Status:** DECIDED 2026-06-04 — **Option B** for v1 (see "Decision" below).
 **Date:** 2026-06-04.
 **Context:** Product feedback (2026-06-03): the agent on-chain registration path

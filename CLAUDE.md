@@ -11,8 +11,10 @@ calls ride a native account-abstraction transaction type (`type 0x76`,
 [`BaseAaTransaction`]) carrying a batch of `calls[]` and an optional `fee_payer`
 (sponsored gas). A Rust pre-execution hook in the EVM handler decodes the batch and
 applies the keychain checks (CircuitBreaker → Scope → SpendingLimit) before execution.
-This supersedes the earlier **Plan B** design (standard EIP-1559 tx + EIP-7702 delegation
-to `SCIAgentDelegator` + precompile), which is retained only as historical context below.
+This supersedes — and fully replaces — the earlier **Plan B** design (standard EIP-1559 tx
++ EIP-7702 delegation to a `SCIAgentDelegator` predeploy + precompile hook). Plan B has been
+removed from this branch: no `SCIAgentDelegator` / `SciAgentRegistrar` contracts, no `0xCCCC01`
+predeploy, and no 7702 `run_pre_execution_hook` path — only the AA-native path remains.
 Plan A work lives on branch `feat/plan-a-aa-keychain`; see `sci/docs/test/plan-a-status.md`
 for the phase tracker. The Keychain Precompile, shim crates, and Tempo-sync workflow are
 unchanged by the Plan A pivot — only the agent-tx carrier and the set of touched Base
@@ -30,8 +32,6 @@ Agent → mppx.fetch() → SCI Agent Gateway (MPP 402 + REST)
                           Pre-execution hook: CircuitBreaker → Scope → SpendingLimit
                           Precompile: 0xAAAA.. AccountKeychain
                           Predeploys: 0xBBBB01 Registry, 0xBBBB02 Budget, 0xBBBB03 Breaker
-                          0xCCCC01 SCIAgentDelegator (Plan B / EIP-7702, legacy)
-                          IDA contract (ERC-721 + ERC-6551 TBA)
 ```
 
 ## Repository Structure
@@ -56,7 +56,6 @@ sci-chain/
 │   │                                so verbatim Tempo source compiles unmodified
 │   ├── contracts/             ←   Solidity (Foundry project)
 │   │   ├── src/agent/         ←     P0-2: AccessKeyRegistry, BudgetController, CircuitBreaker
-│   │   ├── src/integration/   ←     P0-4: SciAgentRegistrar, SCIAgentDelegator
 │   │   └── src/interfaces/    ←     Public interfaces (other repos depend on these)
 │   ├── gateway/               ←   TypeScript (MPP Server + REST API)
 │   ├── devnet/                ←   Genesis patch + allocs
@@ -454,7 +453,6 @@ just devnet status
 | `0xBBBBBBBB00000000000000000000000000000001` | AgentAccessKeyRegistry | Predeploy (Solidity) |
 | `0xBBBBBBBB00000000000000000000000000000002` | AgentBudgetController | Predeploy (Solidity) |
 | `0xBBBBBBBB00000000000000000000000000000003` | AgentCircuitBreaker | Predeploy (Solidity) |
-| `0xCCCCCCCC00000000000000000000000000000001` | SCIAgentDelegator | Predeploy (Solidity, EIP-7702) |
 
 ## Key Rust Files (SCI)
 
@@ -505,8 +503,6 @@ just devnet status
 - `sci/contracts/src/agent/AgentAccessKeyRegistry.sol` — keyId ↔ agentId binding
 - `sci/contracts/src/agent/AgentBudgetController.sol` — budget query + alerts
 - `sci/contracts/src/agent/AgentCircuitBreaker.sol` — trip/reset emergency freeze
-- `sci/contracts/src/integration/SciAgentRegistrar.sol` — ERC-8004 one-step registration
-- `sci/contracts/src/integration/SCIAgentDelegator.sol` — EIP-7702 batch executor
 - `sci/contracts/src/interfaces/IAccountKeychain.sol` — Precompile interface
 
 ## AA Transaction Type (Plan A, `type 0x76`)
@@ -574,31 +570,16 @@ the agent-tx identification (Q1) was superseded by Plan A on 2026-06-01.
 ([`BaseAaTransaction`]). The tx type itself is the signal — no `code(tx.to)` read, no
 mandatory EIP-7702 delegation. The AA tx carries `calls[]` and `fee_payer` natively;
 `session_key = signer`, and the root account / key binding is resolved from the keychain.
-The Phase 2 handler decodes the AA tx's `calls[]` directly (no `SCIAgentDelegator`
-indirection). Mapping the existing keychain hook onto this path is Plan A Phase 2 — see
-`sci/docs/test/plan-a-status.md`.
-
-**Plan B (legacy, retained for context).** The original scheme read `code(tx.to)` and
-required an EIP-7702 delegation: a tx was an agent tx iff `tx.to` carried
-`0xef0100 || SCI_AGENT_DELEGATOR_ADDRESS` (0xCCCC…01) **and** `keys[tx.to][tx.from]`
-existed in the keychain — then `root = tx.to`, `session_key = tx.from`. Its security
-rationale: without 7702 delegation a session key signing as itself is a powerless EOA,
-and all "act as root" power flowed through `SCIAgentDelegator.execute(...)`, which
-`require(getTransactionKey() != address(0))` — a slot only the hook could set. Plan A
-removes this indirection because the AA tx type carries the batch directly.
+The handler decodes the AA tx's `calls[]` directly and runs the keychain hook
+(`run_aa_keychain_hook`) over them. See `sci/docs/test/plan-a-status.md`.
 
 ### Per-call check placement (Q2: Rust hook decodes batch)
 
 The hook loops through each `Call` and validates scope + deducts spending limit per call
 **before** EVM execution begins. This matches Tempo's `prevalidate_keychain_call_scopes`
-pattern (`tempo/crates/revm/src/handler.rs:395-492`). Under Plan A the `calls[]` come
-from the AA tx body directly; under Plan B they were decoded from `tx.input` as
-`SCIAgentDelegator::execute(Call[])`.
-
-**Trade-off accepted.** Rust crate has to import the `Call[]` ABI from
-`sci-precompile-abi`. ABI lives canonically in
-`sci/crates/precompile-abi/src/predeploys/sci_agent_delegator.rs` so Rust and
-Solidity share one source of truth.
+pattern (`tempo/crates/revm/src/handler.rs:395-492`). The `calls[]` come from the AA tx
+body directly: the `SciHandler` reads `aa_parts()` and passes the decoded batch to the
+hook as `AaCall`s.
 
 **Why not in-Solidity loop.** PDF page 11 promises "失败时不消耗 gas" — fail-fast
 in Rust means only intrinsic gas is consumed on any per-call failure. In-Solidity
@@ -742,38 +723,6 @@ cast call 0xAAAAAAAA00000000000000000000000000000000 \
   0x70997970C51812dc3A010C7d01b50e0d17dc79C8 \
   --rpc-url http://localhost:8545
 ```
-
-### EIP-7702 self-auth nonce trap (cast)
-
-When the authorizer of a 7702 authorization is also the **sender** of the type-4 tx
-(i.e. an EOA delegating its own account to a contract — the common path for the SCI
-agent-tx loop, where the root account 7702-delegates to `SCIAgentDelegator`),
-`cast wallet sign-auth` defaults to the **current** account nonce, but EIP-7702
-processes authorization entries **after** the tx's nonce increment. The auth's
-`nonce` field must equal the account nonce *after* the tx increments it — i.e.
-`current_nonce + 1`. If you omit `--nonce` the tx still ships as type-4, gets
-`status=1`, burns ~46k gas (the auth-list verification cost), but the delegation is
-**silently discarded**: `cast code <authorizer>` stays `0x`.
-
-```bash
-ALICE_PK=0xac0974...
-DELEGATOR=0xCCCCCCCC00000000000000000000000000000001
-
-NEXT_NONCE=$(( $(cast nonce $ALICE --rpc-url $L2_RPC) + 1 ))
-
-ALICE_AUTH=$(cast wallet sign-auth $DELEGATOR \
-  --private-key $ALICE_PK --rpc-url $L2_RPC \
-  --nonce $NEXT_NONCE)                            # ← critical
-
-cast send $ALICE --value 0 --auth "$ALICE_AUTH" \
-  --rpc-url $L2_RPC --private-key $ALICE_PK
-# Expected: cast code $ALICE → 0xef0100<delegator-address-20-bytes>
-```
-
-Cross-authorization (someone else signs the auth, you submit the tx as a different
-EOA) does NOT need this adjustment — there, `cast wallet sign-auth` with the
-authorizer's RPC-derived nonce is already correct because the authorizer's nonce
-isn't incremented by the tx. The trap is specific to self-auth.
 
 ## What NOT to do
 

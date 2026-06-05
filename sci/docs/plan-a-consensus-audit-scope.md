@@ -116,9 +116,11 @@ should confirm, the known intentional divergences, and the evidence gathered so 
   EIP-1559 approximation (PoC simplifications; tracked for backfill).
 - `is_tip20(target)` is stubbed to `true` — recipient/selector restrictions apply to any
   transfer/approve target (SCI uses standard ERC-20, no TIP-20 factory).
-- `SCIAgentDelegator` (`0xCCCC..01`) is a Plan B / EIP-7702 legacy compat contract, NOT on the
-  Plan A hot path; agent registration under Option B is the root directly calling
-  `keychain.authorizeKey` (see `agent-registration-path-decision.md`).
+- Plan B (EIP-7702 + `SCIAgentDelegator` predeploy + `run_pre_execution_hook`) has been
+  **removed** from this branch — it is out of audit scope. Agent authorization is solely the
+  AA-native path (`run_aa_keychain_hook` over a `0x76` tx whose `root` is set); registration
+  under Option B is the root directly calling `keychain.authorizeKey`
+  (see `agent-registration-path-decision.md`).
 
 ## Evidence gathered
 
