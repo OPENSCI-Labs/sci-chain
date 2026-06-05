@@ -19,7 +19,7 @@
 set -uo pipefail
 export PATH=$PATH:~/.foundry/bin
 
-SCI_REPO=${SCI_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}
+SCI_REPO=${SCI_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}
 cd "$SCI_REPO"
 RPC=${L2_RPC:-http://localhost:8545}
 SEQ_RPC=${L2_NODE_RPC:-http://localhost:7549}
