@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Produces a genesis-alloc JSON fragment containing the 4 SCI fixed-address Solidity
+# Produces a genesis-alloc JSON fragment containing the 3 SCI fixed-address Solidity
 # predeploys, ready to be merged into the L2 genesis.json. Compose with the existing
 # sci-allocs.json (which seeds the two precompile addresses 0xAAAA..00/01) via the
 # apply-sci-allocs.sh helper.
@@ -12,13 +12,12 @@
 #             Defaults to devnet test-account-0 (0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266).
 #
 # Why this approach:
-# - `AgentCircuitBreaker` at 0xBBBB..03 and `SCIAgentDelegator` at 0xCCCC..01 are
-#   load-bearing: the Rust SciAgentState precompile gates `tripKey/untripKey` on
-#   `msg.sender == 0xBBBB..03`, and the pre-execution hook gates agent-tx detection
-#   on `7702 delegate == 0xCCCC..01`. These two MUST land at their fixed addresses.
+# - `AgentCircuitBreaker` at 0xBBBB..03 is load-bearing: the Rust SciAgentState
+#   precompile gates `tripKey/untripKey` on `msg.sender == 0xBBBB..03`, so it MUST
+#   land at its fixed address.
 # - The other two (Registry, BudgetController) are observers; baking them at their
 #   spec'd addresses is for consistency.
-# - For all four, the runtime bytecode (`deployedBytecode`) is self-contained — no
+# - For all three, the runtime bytecode (`deployedBytecode`) is self-contained — no
 #   constructor immutables to thread. Only `AgentCircuitBreaker` has constructor
 #   state (Ownable._owner at slot 0), which we seed in `storage`.
 
@@ -48,7 +47,6 @@ bytecode() {
 REGISTRY_CODE=$(bytecode AgentAccessKeyRegistry)
 BUDGET_CODE=$(bytecode AgentBudgetController)
 BREAKER_CODE=$(bytecode AgentCircuitBreaker)
-DELEGATOR_CODE=$(bytecode SCIAgentDelegator)
 
 cat <<EOF
 {
@@ -69,11 +67,6 @@ cat <<EOF
     "storage": {
       "0x0000000000000000000000000000000000000000000000000000000000000000": "${OWNER_SLOT_VALUE}"
     }
-  },
-  "0xcccccccc00000000000000000000000000000001": {
-    "nonce": "0x1",
-    "balance": "0x0",
-    "code": "${DELEGATOR_CODE}"
   }
 }
 EOF
