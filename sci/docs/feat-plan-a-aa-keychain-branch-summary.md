@@ -141,8 +141,35 @@ which Plan A never creates):
 - `forge build` + `forge test`: 16 unit tests pass; 7 integration suites skip without a fork.
 - All Plan A Phase 1–6 flows devnet-verified (per the phase tracker in
   `docs/test/plan-a-status.md`, gitignored).
+- Integration test `sci/devnet/e2e/p1-p5-integration.sh` (27 assertions incl. edge cases)
+  passes against a live devnet sequencer.
 
-## 8. One-sentence summary
+## 8. TBD — agent-facing tooling (send AA txs without `sci-aa-txgen`)
+
+Today an agent can only build a `0x76` AA tx via the dev CLI `sci-aa-txgen`. Standard
+wallets / ethers / viem don't recognize the custom tx type, and SCI's `0x76` is
+wire-incompatible with Tempo's (9 vs 14 fields), so Tempo's viem/SDK/cast can't be reused.
+Tempo, by contrast, lets an agent simply call an MCP tool `send_payment(to, amount, memo)`
+because the encoding is baked into its ecosystem (`agent → tempo-mcp → tempo-accounts-sdk →
+viem → 0x76`; verified against `~/opensci/tempo-test-net/plan-b/logs/audit.jsonl`).
+
+To give SCI agents the same "just send" experience, three layers remain to be built
+(bottom-up):
+
+1. **A JS encoder for SCI's `0x76`** — either fork viem to add the SCI AA tx type, or
+   re-implement `aa-txgen`'s `BaseAaTransaction` encoding in TypeScript. (SCI's format
+   differs from Tempo's, so viem's built-in `tempo` support cannot be reused directly.)
+2. **An SDK layer** — wraps keychain management (`authorizeKey` / `revokeKey`) + sponsored
+   sending (`fee_payer == root`), analogous to `tempo-accounts-sdk`.
+3. **A Gateway / MCP server** — exposes high-level agent tools (e.g. `send_payment`),
+   analogous to `tempo-mcp`; this is the `SCI Agent Gateway` (MPP + REST) in the
+   architecture. The agent then calls `send_payment(to, amount)` and never touches
+   `sci-aa-txgen`.
+
+Reference stack to mirror (clone + archaeology notes under `~/opensci/tempo-test-net/`):
+`agent → tempo-mcp → tempo-accounts-sdk → viem → 0x76`.
+
+## 9. One-sentence summary
 
 `feat/plan-a-aa-keychain` adds a native AA transaction type (`0x76`) with a pre-execution
 keychain hook on top of the Tempo-ported `AccountKeychain` precompile, delivering the Agent
