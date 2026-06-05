@@ -5,7 +5,7 @@ import { DevnetBase } from "./base/DevnetBase.sol";
 import { AgentCircuitBreaker } from "../../src/agent/AgentCircuitBreaker.sol";
 
 /// @title  Smoke.t.sol
-/// @notice §1 of `sci/docs/p0-2-integration-tests.md` — preflight checks. These
+/// @notice Devnet preflight checks (chain id, predeploy presence, CB owner). These
 ///         are the fastest tests; failure here means the devnet is in a state
 ///         no other test can cover.
 contract SmokeTest is DevnetBase {
@@ -22,9 +22,9 @@ contract SmokeTest is DevnetBase {
     }
 
     function test_Predeploys_HaveSolidityBytecode() public view {
-        // All 4 predeploys should have non-trivial bytecode whose first byte is
+        // All 3 predeploys should have non-trivial bytecode whose first byte is
         // the standard Solidity dispatcher prefix (0x60 PUSH1).
-        address[4] memory addrs = [REGISTRY, BUDGET, BREAKER, DELEGATOR];
+        address[3] memory addrs = [REGISTRY, BUDGET, BREAKER];
         for (uint256 i; i < addrs.length; ++i) {
             bytes memory code = addrs[i].code;
             assertGt(code.length, 100, "predeploy bytecode too short");

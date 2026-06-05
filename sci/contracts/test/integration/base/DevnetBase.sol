@@ -12,9 +12,9 @@ import { MockSciAgentState } from "../../mocks/MockSciAgentState.sol";
 ///
 /// Strategy
 /// --------
-/// * Forking pulls genesis state, including the runtime bytecode at the 4 SCI
-///   predeploy addresses (`0xBBBB..01/02/03`, `0xCCCC..01`). Tests therefore exercise
-///   the **real deployed bytecode** at those addresses, not a fresh local deploy.
+/// * Forking pulls genesis state, including the runtime bytecode at the 3 SCI
+///   predeploy addresses (`0xBBBB..01/02/03`). Tests therefore exercise the **real
+///   deployed bytecode** at those addresses, not a fresh local deploy.
 /// * The two precompile addresses (`0xAAAA..00/01`) hold a 1-byte `0xef` marker on
 ///   the live chain — the actual implementation is Rust code in the EL that a
 ///   forked anvil cannot reproduce. We therefore `vm.etch` mock implementations
@@ -38,7 +38,6 @@ abstract contract DevnetBase is Test {
     address internal constant REGISTRY = 0xbbBbbbBB00000000000000000000000000000001;
     address internal constant BUDGET = 0xbBbBbBbB00000000000000000000000000000002;
     address internal constant BREAKER = 0xBbBbbBbB00000000000000000000000000000003;
-    address internal constant DELEGATOR = 0xCcCCCCcC00000000000000000000000000000001;
 
     // -------- Devnet test accounts (mnemonic "test test test ... junk") --------
     address internal constant ALICE = 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266;

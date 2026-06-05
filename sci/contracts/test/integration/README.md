@@ -1,28 +1,27 @@
 # Integration tests — SCI base contracts on devnet
 
 This directory holds Foundry tests that target the **live SCI devnet** via
-`forge --fork-url`. They run against the genesis-baked bytecode at the 4 fixed
+`forge --fork-url`. They run against the genesis-baked bytecode at the 3 fixed
 predeploy addresses while mocking the Rust precompiles (which forking can't
-reproduce). For tests that need the real Rust pre-execution hook, see
-`../../script/integration/` instead.
+reproduce). For the end-to-end agent loop that needs the real Rust pre-execution
+hook, see `sci/devnet/e2e/` instead.
 
 ## What's covered
 
 | File | Purpose |
 |---|---|
 | `Smoke.t.sol` | Chain ID, predeploy presence, CB owner, account funding |
-| `DeploymentParity.t.sol` | Live runtime bytecode at `0xBBBB..01/02/03` and `0xCCCC..01` byte-equals current `forge inspect deployedBytecode` |
+| `DeploymentParity.t.sol` | Live runtime bytecode at `0xBBBB..01/02/03` byte-equals current `forge inspect deployedBytecode` |
 | `CircuitBreaker.t.sol` | Trip/untrip flows, guardian model, access control + fuzz |
 | `Registry.t.sol` | bindKey / unbindKey semantics + fuzz over (keyId, agentId) |
 | `Budget.t.sol` | Threshold + alert behavior + fuzz over (threshold, remaining) |
-| `Delegator.t.sol` | Fail-closed direct call (MissingTransactionKey) + fuzz |
 | `Invariants.t.sol` | Cross-contract invariants (trip-state mirror, owner non-zero) |
 | `Stress.t.sol` | Heavy-load: 100-entry bindings, 200 thresholds, 100 trip cycles |
 | `base/DevnetBase.sol` | Shared base contract (addresses, accounts, mock-install helpers) |
 
-For the end-to-end agent-tx loop that exercises the Rust hook +
-`SCIAgentDelegator` execute path, see
-`sci/contracts/script/integration/AgentTxLoop.s.sol`.
+For the end-to-end agent-tx loop that exercises the Rust hook under Plan A (native
+AA tx `0x76`, no EIP-7702), see `sci/devnet/e2e/` and the runbook
+`sci/docs/plan-a-aa-e2e.md`.
 
 ## Running
 
@@ -63,23 +62,23 @@ no two tests share a key, so binding/unbinding state can't leak across cases.
 `vm.skip(true)` if there's no fork. So plain `forge test` will simply skip the
 integration suite — `test/*.t.sol` unit tests run as usual.
 
-## Live-broadcast counterparts
+## End-to-end agent loop (live devnet)
 
 The integration tests here cover **Solidity behavior under the SCI predeploy
 addresses**. They do NOT cover:
 
 - The Rust pre-execution hook (CircuitBreaker check, Scope check, SpendingLimit
-  pre-flight) — needs real chain
-- EIP-7702 set-code tx + delegator dispatch — needs real chain
-- Cross-frame `transaction_key` propagation between hook → delegator
+  pre-flight) — needs a real chain
+- The native AA tx (`0x76`) carrier, signature recovery, and atomic batch execution
 
-Those live in `sci/contracts/script/integration/AgentTxLoop.s.sol`. Run with:
+Those are exercised by the Plan A agent-loop e2e scripts in `sci/devnet/e2e/`
+(`e2e-loop.sh` = register → AA transfer → limit → circuit breaker → expiry;
+`reject-test.sh` = a hook-rejected AA tx must not wedge the chain). Run with:
 
 ```bash
-forge script script/integration/AgentTxLoop.s.sol \
-  --rpc-url $L2_RPC --broadcast -vvv
+L2_RPC=http://localhost:8545 sci/devnet/e2e/e2e-loop.sh
 ```
 
-That script will mutate devnet state (key authorize, 7702 install, etc.) — see
-`sci/devnet/E2E.md` for the cleanup procedure or just run against a fresh
-genesis.
+Those scripts mutate devnet state (key authorize, trip/untrip, etc.) — see the
+runbook `sci/docs/plan-a-aa-e2e.md` for per-phase expected output, and the
+`project_devnet_v1_7_1_deployment` memory for a fresh-genesis redeploy.

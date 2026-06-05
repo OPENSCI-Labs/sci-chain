@@ -123,7 +123,7 @@ contract RegistryIntegrationTest is DevnetBase {
         // those is meaningless and may interfere with other state).
         vm.assume(keyId != KEYCHAIN && keyId != SCI_AGENT_STATE);
         vm.assume(keyId != REGISTRY && keyId != BUDGET);
-        vm.assume(keyId != BREAKER && keyId != DELEGATOR);
+        vm.assume(keyId != BREAKER);
         // The fork preserves the registry's live storage; any keyId that's
         // already bound (e.g. from a prior cast walkthrough) would revert with
         // AlreadyBound at the second bindKey call. Skip those.
@@ -144,7 +144,7 @@ contract RegistryIntegrationTest is DevnetBase {
         vm.assume(agentId != bytes32(0));
         vm.assume(keyId != KEYCHAIN && keyId != SCI_AGENT_STATE);
         vm.assume(keyId != REGISTRY && keyId != BUDGET);
-        vm.assume(keyId != BREAKER && keyId != DELEGATOR);
+        vm.assume(keyId != BREAKER);
         vm.assume(!AgentAccessKeyRegistry(REGISTRY).isBound(keyId));
 
         _seedKeychain(ALICE, keyId);

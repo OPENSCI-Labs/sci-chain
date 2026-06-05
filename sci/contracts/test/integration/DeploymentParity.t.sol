@@ -6,11 +6,10 @@ import { Test } from "forge-std/Test.sol";
 import { AgentAccessKeyRegistry } from "../../src/agent/AgentAccessKeyRegistry.sol";
 import { AgentBudgetController } from "../../src/agent/AgentBudgetController.sol";
 import { AgentCircuitBreaker } from "../../src/agent/AgentCircuitBreaker.sol";
-import { SCIAgentDelegator } from "../../src/integration/SCIAgentDelegator.sol";
 
 /// @title  DeploymentParity.t.sol
-/// @notice Verifies that the runtime bytecode currently deployed at the 4 SCI
-///         fixed addresses on the live devnet **byte-equals** what local `forge
+/// @notice Verifies that the runtime bytecode currently deployed at the 3 SCI
+///         predeploy addresses on the live devnet **byte-equals** what local `forge
 ///         build` produces from the same .sol sources. Catches:
 ///           * source/devnet drift (someone changed a .sol without rebaking
 ///             genesis)
@@ -35,7 +34,6 @@ contract DeploymentParityTest is Test {
     address internal constant REGISTRY = 0xbbBbbbBB00000000000000000000000000000001;
     address internal constant BUDGET = 0xbBbBbBbB00000000000000000000000000000002;
     address internal constant BREAKER = 0xBbBbbBbB00000000000000000000000000000003;
-    address internal constant DELEGATOR = 0xCcCCCCcC00000000000000000000000000000001;
 
     function setUp() public {
         if (block.chainid != SCI_CHAIN_ID) vm.skip(true);
@@ -52,12 +50,6 @@ contract DeploymentParityTest is Test {
         bytes memory want = type(AgentBudgetController).runtimeCode;
         bytes memory have = BUDGET.code;
         assertEq(keccak256(have), keccak256(want), "Budget runtime drift");
-    }
-
-    function test_SCIAgentDelegator_MatchesSource() public view {
-        bytes memory want = type(SCIAgentDelegator).runtimeCode;
-        bytes memory have = DELEGATOR.code;
-        assertEq(keccak256(have), keccak256(want), "Delegator runtime drift");
     }
 
     function test_AgentCircuitBreaker_MatchesSource() public view {
