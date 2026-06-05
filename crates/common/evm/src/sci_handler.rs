@@ -3,9 +3,10 @@
 //! [`SciHandler`] wraps [`BaseHandler`] and delegates every method to it verbatim except
 //! [`Handler::validate_against_state_and_deduct_caller`], which — after the inner
 //! handler does the usual gas pre-pay / nonce bump — calls
-//! [`sci_precompiles::run_pre_execution_hook`] to enforce CircuitBreaker, call scope,
-//! and spending-limit constraints for 7702-delegated agent txs. Deposit (system) txs
-//! short-circuit so OP-Stack predeploy ticks aren't subjected to keychain checks.
+//! [`sci_precompiles::run_aa_keychain_hook`] to enforce CircuitBreaker, call scope, and
+//! spending-limit constraints for AA (`0x76`) agent txs whose `root` is set. Deposit
+//! (system) txs short-circuit so OP-Stack predeploy ticks aren't subjected to keychain
+//! checks.
 //!
 //! The hook logic itself lives in `sci-precompiles` so that crate stays independent of
 //! `base-common-evm` — see `sci/crates/precompiles/src/handler/mod.rs` for the
@@ -36,8 +37,7 @@ use revm::{
 };
 
 use sci_precompiles::{
-    AaCall, HookOutcome, apply_aa_post_execution_deductions, apply_post_execution_deductions,
-    run_aa_keychain_hook, run_pre_execution_hook,
+    AaCall, HookOutcome, apply_aa_post_execution_deductions, run_aa_keychain_hook,
 };
 
 use crate::{
@@ -311,7 +311,7 @@ where
         // and gate the batch (circuit breaker + per-call scope). Extract the batch here
         // (the hook crate can't read the AA tx env) and run the AA-native keychain hook.
         // AA txs without `root` (a plain batch executed as the signer) and every non-AA tx
-        // fall through to the legacy Plan B hook, which no-ops for non-agent traffic.
+        // are not agent traffic and fall through to normal execution with no keychain gate.
         let aa_calls: Option<Vec<AaCall>> = if root.is_some() {
             evm.ctx().tx().aa_parts().map(|parts| {
                 parts
@@ -342,10 +342,8 @@ where
                     HookOutcome::Reject(err) => Err(err),
                 }
             }
-            _ => match run_pre_execution_hook::<EVM, ERROR>(evm)? {
-                HookOutcome::Pass => Ok(()),
-                HookOutcome::Reject(err) => Err(err),
-            },
+            // Non-agent traffic (non-AA tx, or AA tx without `root`): no keychain gate.
+            _ => Ok(()),
         }
     }
 
@@ -432,13 +430,11 @@ where
         // but doesn't write; this is where the real deduction lands, so a tx that the
         // hook authorized but the body then reverts costs zero quota.
         //
-        // Deposit txs and non-agent txs short-circuit inside the helper (it reads the
-        // keychain's transient `transaction_key` slot and returns immediately on zero).
+        // Only AA agent txs (root set) carry a deduction; deposit and non-agent txs have none.
         if frame_result.interpreter_result().result.is_ok() {
             // AA agent txs (root set) meter against the keychain via the AA-native path
-            // (native value + gas → address(0) sentinel; ERC-20 → per-token); every other
-            // tx (incl. AA without root) uses the legacy Plan B deduction, which no-ops when
-            // the keychain transient `transaction_key` slot is zero.
+            // (native value + gas → address(0) sentinel; ERC-20 → per-token). Non-agent
+            // txs (non-AA, or AA without root) have no spending-limit deduction.
             let root = evm.ctx().tx().aa_parts().and_then(|a| a.root);
             if let Some(root_addr) = root {
                 let signer = evm.ctx().tx().caller();
@@ -467,8 +463,6 @@ where
                 apply_aa_post_execution_deductions::<EVM, ERROR>(
                     evm, root_addr, signer, &calls, gas_deduction,
                 )?;
-            } else {
-                apply_post_execution_deductions::<EVM, ERROR>(evm)?;
             }
         }
         self.inner.execution_result(evm, frame_result)
