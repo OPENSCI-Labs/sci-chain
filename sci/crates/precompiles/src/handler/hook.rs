@@ -4,17 +4,15 @@
 
 use crate::{
     AccountKeychain, SciAgentState,
-    handler::decode::{InnerCall, classify_token_call, decode_execute_batch},
+    handler::decode::classify_token_call,
     storage::{Handler, StorageCtx, evm::EvmPrecompileStorageProvider},
 };
 use alloy_evm::{Database as AlloyDatabase, EvmInternals};
 use alloy_primitives::{Address, U256};
 use std::collections::HashMap;
 use revm::{
-    bytecode::Bytecode,
-    context::journaled_state::account::JournaledAccountTr,
     context_interface::{
-        Cfg, ContextTr, Database, JournalTr, Transaction,
+        Cfg, ContextTr, Database, JournalTr,
         result::{FromStringError, InvalidTransaction},
     },
     handler::EvmTr,
@@ -22,9 +20,7 @@ use revm::{
 };
 use std::fmt::Debug;
 use tempo_chainspec::hardfork::TempoHardfork;
-use tempo_contracts::{
-    precompiles::isTrippedCall, predeploys::SCI_AGENT_DELEGATOR_ADDRESS,
-};
+use tempo_contracts::precompiles::isTrippedCall;
 
 /// Outcome reported back to the handler wrapper.
 ///
@@ -37,179 +33,6 @@ pub enum HookOutcome<E> {
     Pass,
     /// Hook rejected the tx — surface this error via the `Handler::Error` path.
     Reject(E),
-}
-
-/// OP-Stack deposit transaction type. Hardcoded here (rather than imported from
-/// `base-common-evm`) because `sci-precompiles` must not depend back on Base — the
-/// crate is consumed by `base-common-evm::factory`. The wrapper (`SciHandler`) is the
-/// primary gate for skipping deposits; this constant exists so the hook can do the same
-/// check defensively when called from contexts that don't filter upstream.
-const DEPOSIT_TX_TYPE: u8 = 0x7E;
-
-/// Runs the SCI Chain pre-execution hook over the current tx in `evm`.
-///
-/// Errors of type `ERROR` are only returned for system-level failures (database errors,
-/// state corruption). Tx-level rejections (scope violations, quota exhaustion, tripped
-/// agent) come back as `Ok(HookOutcome::Reject(err))`, where `err` is constructed via
-/// `ERROR::from_string` so the wrapper can route it through revm's standard tx-error
-/// pipeline.
-///
-/// Deposit (system) txs short-circuit at the top as a defensive measure — the primary
-/// deposit gate lives in [`SciHandler::validate_against_state_and_deduct_caller`], but
-/// repeating the check here means a future caller that invokes the hook directly (a
-/// custom handler, a test harness) still does the right thing.
-pub fn run_pre_execution_hook<EVM, ERROR>(evm: &mut EVM) -> Result<HookOutcome<ERROR>, ERROR>
-where
-    EVM: EvmTr<Context: ContextTr<Db: AlloyDatabase, Journal: JournalTr<Database: AlloyDatabase> + Debug>>,
-    ERROR: From<<<EVM::Context as ContextTr>::Db as Database>::Error>
-        + FromStringError
-        + From<InvalidTransaction>,
-{
-    // ----- 0. Defensive deposit-tx skip (primary gate is in SciHandler). -----
-    if evm.ctx().tx().tx_type() == DEPOSIT_TX_TYPE {
-        return Ok(HookOutcome::Pass);
-    }
-
-    // ----- 1. Snapshot tx fields before borrowing the journal -----
-    let (target_kind, caller, input) = {
-        let ctx = evm.ctx();
-        let tx = ctx.tx();
-        (tx.kind(), tx.caller(), tx.input().clone())
-    };
-
-    // ----- 1.5. Set keychain's tx_origin for all non-deposit txs.
-    //            Tempo's handler does this unconditionally so admin keychain ops
-    //            (authorizeKey, revokeKey, etc.) see a non-zero tx.origin and pass
-    //            the T2+ `ensure_admin_caller` check. We mirror that here. -----
-    enter_keychain_storage(evm.ctx(), || -> crate::error::Result<()> {
-        let mut kc = AccountKeychain::default();
-        kc.set_tx_origin(caller)?;
-        // Reset transaction_key to zero (transient slot may persist across txs in
-        // tests; in production each tx starts with zero, but being explicit is cheap).
-        kc.set_transaction_key(alloy_primitives::Address::ZERO)?;
-        Ok(())
-    })
-    .map_err(|e| ERROR::from_string(format!("keychain tx_origin setup failed: {e:?}")))?;
-
-    let target = match target_kind {
-        TxKind::Call(t) => t,
-        // CREATE can't be 7702-delegated and isn't an agent flow.
-        TxKind::Create => return Ok(HookOutcome::Pass),
-    };
-
-    // ----- 2. Read code(target) and parse EIP-7702 delegation header -----
-    let delegate = {
-        let acct = evm.ctx().journal_mut().load_account_with_code_mut(target)?;
-        match acct.data.account().info.code.clone() {
-            Some(Bytecode::Eip7702(eip)) => Some(eip.delegated_address),
-            _ => None,
-        }
-    };
-    let Some(delegate) = delegate else {
-        return Ok(HookOutcome::Pass);
-    };
-    if delegate != SCI_AGENT_DELEGATOR_ADDRESS {
-        return Ok(HookOutcome::Pass);
-    }
-
-    let root = target;
-    let session_key = caller;
-
-    // ----- 3. Probe keychain: is keys[root][session_key] still active? -----
-    let is_active = enter_keychain_storage(evm.ctx(), || {
-        let kc = AccountKeychain::default();
-        kc.key_is_active(root, session_key)
-    })
-    .map_err(|e| ERROR::from_string(format!("keychain probe failed: {e:?}")))?;
-
-    if !is_active {
-        // 7702-delegated but no registered key → not an SCI agent tx, pass through.
-        return Ok(HookOutcome::Pass);
-    }
-
-    // ----- 4. Decode batch; on selector mismatch fall back to a single-call probe -----
-    let calls = decode_execute_batch(&input).unwrap_or_else(|| {
-        vec![InnerCall {
-            target,
-            value: U256::ZERO,
-            data: input.to_vec(),
-        }]
-    });
-
-    // ----- 5. CB + transient signals + scope/deduct, wrapped in a journal checkpoint
-    //         so partial writes auto-rollback on hook rejection (Q4 R1). -----
-    let checkpoint = evm.ctx().journal_mut().checkpoint();
-
-    let hook_result = enter_keychain_storage(evm.ctx(), || -> crate::error::Result<()> {
-        // 5a. CircuitBreaker
-        let cb = SciAgentState::default();
-        if cb.is_tripped(isTrippedCall { sessionKey: session_key })? {
-            return Err(crate::error::TempoPrecompileError::Fatal(format!(
-                "agent session key {session_key:?} is tripped",
-            )));
-        }
-
-        // 5b. Seed transient slots so SCIAgentDelegator.execute()'s require passes and
-        //     downstream keychain methods see the right access key.
-        let mut kc = AccountKeychain::default();
-        kc.set_transaction_key(session_key)?;
-        kc.set_tx_origin(caller)?;
-
-        // 5c. Per-call scope check + pre-flight spending check (read-only).
-        //     Actual deduction is deferred to `apply_post_execution_deductions` so a
-        //     tx that hook-passes but body-reverts doesn't lose quota (Q4 strong R1).
-        let mut totals_per_token: HashMap<Address, U256> = HashMap::new();
-        for call in &calls {
-            kc.validate_call_scope_for_transaction(
-                root,
-                session_key,
-                &TxKind::Call(call.target),
-                &call.data,
-            )?;
-            if let Some((token, amount)) = classify_token_call(call.target, &call.data) {
-                let entry = totals_per_token.entry(token).or_insert(U256::ZERO);
-                *entry = entry.saturating_add(amount);
-            }
-        }
-        // Pre-flight: verify each token's total would fit. We honor `enforce_limits`
-        // by skipping the check when the key opts out — same as `verify_and_update_spending`.
-        let now = StorageCtx::default().timestamp().saturating_to::<u64>();
-        let key = kc.keys[root][session_key].read()?;
-        if key.enforce_limits {
-            for (token, total) in &totals_per_token {
-                let remaining = kc.effective_remaining_limit(root, session_key, *token, now)?;
-                if *total > remaining {
-                    return Err(
-                        tempo_contracts::precompiles::AccountKeychainError::spending_limit_exceeded()
-                            .into(),
-                    );
-                }
-            }
-        }
-        Ok(())
-    });
-
-    match hook_result {
-        Ok(()) => {
-            // Hook succeeded — fold its writes into the parent (tx-level) checkpoint.
-            // The tx body or revm's catch_error will roll the merged scope back if the
-            // tx later fails for any reason; that delivers Q4 R1 auto-rollback for
-            // post-hook revert paths.
-            evm.ctx().journal_mut().checkpoint_commit();
-            Ok(HookOutcome::Pass)
-        }
-        Err(e) => {
-            // Hook rejected — discard everything we wrote since the checkpoint so a
-            // partial multi-call batch doesn't leak quota deductions.
-            evm.ctx().journal_mut().checkpoint_revert(checkpoint);
-            // Build an InvalidTransaction (not a generic `from_string`/Custom) so the block
-            // builder classifies this as a skippable invalid tx (`as_invalid_tx_err`) rather
-            // than a fatal EVM error that aborts the whole payload — see run_aa_keychain_hook.
-            Ok(HookOutcome::Reject(ERROR::from(InvalidTransaction::Str(
-                format!("SCI hook rejected tx: {e:?}").into(),
-            ))))
-        }
-    }
 }
 
 /// One decoded call from an AA transaction batch, as handed to [`run_aa_keychain_hook`].
@@ -229,11 +52,9 @@ pub struct AaCall {
 
 /// AA-native keychain pre-execution hook (Plan A 2c) — the authorization gate.
 ///
-/// Unlike [`run_pre_execution_hook`] (the Plan B 7702 / `SCIAgentDelegator` path, which
-/// identifies the agent tx by reading `code(tx.to)`), this is driven by the AA tx itself:
-/// the `SciHandler` passes the `root` account the calls execute on behalf of, the
-/// `session_key` (the AA tx signer), and the decoded `calls`. It enforces, for an AA tx
-/// whose `root` is set:
+/// Driven by the AA tx itself: the `SciHandler` passes the `root` account the calls
+/// execute on behalf of, the `session_key` (the AA tx signer), and the decoded `calls`.
+/// It enforces, for an AA tx whose `root` is set:
 ///
 /// 1. **Authorization** — `keys[root][session_key]` must be an active access key; otherwise
 ///    the tx is rejected (this is what makes the 2a/2b `root`-execution + sponsored gas
@@ -258,8 +79,8 @@ where
         + FromStringError
         + From<InvalidTransaction>,
 {
-    // Set tx_origin (mirrors the Plan B hook) so keychain admin ops invoked within the
-    // batch see a non-zero origin, and reset the transaction_key transient slot.
+    // Set tx_origin so keychain admin ops invoked within the batch see a non-zero origin,
+    // and reset the transaction_key transient slot.
     enter_keychain_storage(evm.ctx(), || -> crate::error::Result<()> {
         let mut kc = AccountKeychain::default();
         kc.set_tx_origin(session_key)?;
@@ -356,78 +177,6 @@ where
             ))))
         }
     }
-}
-
-/// Applies deferred spending-limit deductions when the tx body executes successfully.
-///
-/// Pairs with [`run_pre_execution_hook`]: the hook does a read-only pre-flight check on
-/// quota but doesn't write; if and only if the EVM body completes successfully, this
-/// function writes the actual deductions, persisting the quota change to the journal
-/// for commit. If the body reverts (or halts, or otherwise fails), this function is
-/// **not** called by [`SciHandler::execution_result`], so the quota stays untouched —
-/// delivering Q4 strong-R1 semantics.
-///
-/// The agent-tx signal carried across handler methods is the keychain's transient
-/// `transaction_key` slot: the pre-execution hook sets it to the session key iff it
-/// already verified the 7702 delegation + active access key, and this function reads
-/// it. A zero value means "not an agent tx" (the hook either didn't fire or saw a
-/// non-agent tx) and we exit immediately. Because the transient slot already encodes
-/// "hook accepted this tx as agent traffic", we do not re-read the 7702 delegation
-/// header here.
-pub fn apply_post_execution_deductions<EVM, ERROR>(evm: &mut EVM) -> Result<(), ERROR>
-where
-    EVM: EvmTr<Context: ContextTr<Db: AlloyDatabase, Journal: JournalTr<Database: AlloyDatabase> + Debug>>,
-    ERROR: From<<<EVM::Context as ContextTr>::Db as Database>::Error>
-        + FromStringError
-        + From<InvalidTransaction>,
-{
-    // Read the keychain's transient `transaction_key` first — set to the session key by
-    // the pre-execution hook iff it already verified the 7702 delegation and active key.
-    // Zero means "no hook fired or not an agent tx"; bail before doing any more work.
-    let session_key = enter_keychain_storage(evm.ctx(), || {
-        AccountKeychain::default().transaction_key_raw()
-    })
-    .map_err(|e| ERROR::from_string(format!("read transaction_key failed: {e:?}")))?;
-    if session_key.is_zero() {
-        return Ok(());
-    }
-
-    // Snapshot tx.to/input for the per-call decode; `target` doubles as `root` because
-    // the hook only sets `transaction_key` on a Call (the Create branch returns early
-    // there too).
-    let (target_kind, input) = {
-        let ctx = evm.ctx();
-        let tx = ctx.tx();
-        (tx.kind(), tx.input().clone())
-    };
-    let target = match target_kind {
-        TxKind::Call(t) => t,
-        TxKind::Create => return Ok(()),
-    };
-    let root = target;
-
-    // Re-decode batch; fall back to single-call probe for non-execute outer selectors.
-    let calls = decode_execute_batch(&input).unwrap_or_else(|| {
-        vec![InnerCall {
-            target,
-            value: U256::ZERO,
-            data: input.to_vec(),
-        }]
-    });
-
-    // Apply the actual deductions. Pre-flight already verified each fits.
-    enter_keychain_storage(evm.ctx(), || -> crate::error::Result<()> {
-        let mut kc = AccountKeychain::default();
-        for call in &calls {
-            if let Some((token, amount)) = classify_token_call(call.target, &call.data) {
-                kc.verify_and_update_spending(root, session_key, token, amount)?;
-            }
-        }
-        Ok(())
-    })
-    .map_err(|e| ERROR::from_string(format!("apply deductions failed: {e:?}")))?;
-
-    Ok(())
 }
 
 /// Applies the deferred spending-limit deductions for an AA agent tx (Plan A 2c-ii).

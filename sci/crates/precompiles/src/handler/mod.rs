@@ -8,22 +8,22 @@
 //!
 //! The matching **wrapper** lives at `crates/common/evm/src/sci_handler.rs`. That Base
 //! file implements the `Handler` trait by delegating to `OpHandler` and calling
-//! [`run_pre_execution_hook`] at the appropriate point.
+//! [`run_aa_keychain_hook`] at the appropriate point.
 //!
-//! Design locked 2026-05-20 (see CLAUDE.md "Pre-execution Hook Design"):
-//! - **Agent tx identification (Q1)**: `code(tx.to)` is an EIP-7702 delegation pointing
-//!   at `SCI_AGENT_DELEGATOR_ADDRESS`, AND `keys[tx.to][tx.from]` is active.
-//! - **Per-call check placement (Q2)**: Rust hook decodes `execute(Call[])`, validates
-//!   each call, and aborts the whole batch on any failure.
-//! - **`CircuitBreaker` state (Q3)**: in a separate [`crate::SciAgentState`] precompile.
-//! - **Refund semantics (Q4)**: R1 — hook writes go through journaled state, revm
-//!   auto-rolls back on revert. Pessimistic deduction for `approve`.
+//! Design (Plan A, native AA tx `0x76`):
+//! - **Agent tx identification**: the tx is an AA tx (`0x76`) whose `root` is set; the
+//!   `SciHandler` passes `(root, session_key, calls)` in, and `keys[root][session_key]`
+//!   must be an active access key.
+//! - **Per-call check placement**: the hook validates each call's scope and pre-flights
+//!   spending limits, aborting the whole batch on any failure.
+//! - **`CircuitBreaker` state**: in a separate [`crate::SciAgentState`] precompile.
+//! - **Refund semantics (Q4)**: read-only pre-flight; real deductions deferred to
+//!   [`apply_aa_post_execution_deductions`] on body success (strong-R1). Pessimistic
+//!   deduction for `approve`.
 
 pub mod decode;
 mod hook;
 
 pub use hook::{
-    AaCall, HookOutcome, apply_aa_post_execution_deductions, apply_post_execution_deductions,
-    run_aa_keychain_hook,
-    run_pre_execution_hook,
+    AaCall, HookOutcome, apply_aa_post_execution_deductions, run_aa_keychain_hook,
 };
