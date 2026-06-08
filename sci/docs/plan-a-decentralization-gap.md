@@ -92,7 +92,7 @@ envelope. The validator passes `propagate` through unchanged for AA
 |---|---|---|
 | Remove `*propagate = false` for AA | `crates/execution/txpool/src/validator.rs:224-229` | one-line "off switch" |
 | Network-wide registration + hook | `crates/execution/node/src/node.rs:927` (`with_custom_tx_type`) | every peer that ingests AA needs it, else its reth validator rejects `TxTypeNotSupported` |
-| DoS field caps (peer-penalization once gossiping) | new; reference Tempo `validator.rs:42-71,201-297` (`MAX_AA_CALLS`, access-list / auth-list caps) | hardening |
+| DoS field caps (peer-penalization once gossiping) | **DONE** — `validator.rs::ensure_aa_field_limits` + `MAX_AA_CALLS` (32), `MAX_AA_CALL_INPUT_SIZE` (128 KiB), `MAX_AA_ACCESS_LIST_ACCOUNTS` (256), `MAX_AA_STORAGE_KEYS_PER_ACCOUNT` (256), `MAX_AA_ACCESS_LIST_STORAGE_KEYS_TOTAL` (2048); rejects as `BaseTxPoolError` (`is_bad_transaction = true`) before inner validation. SCI's AA has no auth-list/token-limits (Tempo-only), so only calls + access-list are capped. Test `rejects_aa_with_too_many_calls`. | hardening |
 | (RPC only) real alloy conversions | `pooled.rs:104,198` | needed for `eth_getTransactionByHash` etc., NOT for gossip |
 
 ### Open question to validate FIRST (the minimal experiment)
