@@ -1,7 +1,7 @@
 use std::{
     any::Any,
     sync::{
-        Arc,
+        Arc, LazyLock,
         atomic::{AtomicU64, Ordering},
     },
 };
@@ -26,6 +26,17 @@ use reth_transaction_pool::{
 };
 
 use crate::BasePooledTx;
+
+/// Experimental (decentralization gap analysis, `sci/docs/test/plan-a-decentralization-gap.md`):
+/// when `SCI_AA_GOSSIP=1` (or `true`), AA `0x76` transactions are allowed to propagate to peers
+/// instead of being forced `propagate = false`. Default (unset) keeps the production local-only
+/// behavior. Read once at startup. This gate exists to A/B the "de-local-only" hypothesis on a
+/// single image; remove it once the final gossip design lands.
+static AA_GOSSIP_ENABLED: LazyLock<bool> = LazyLock::new(|| {
+    std::env::var("SCI_AA_GOSSIP")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+});
 
 /// Base-specific transaction pool validation errors.
 #[derive(Debug, thiserror::Error)]
@@ -220,9 +231,13 @@ where
         // build. No-op for non-AA / non-sponsored txs.
         outcome = self.check_aa_sponsor_balance(outcome, state);
 
-        // Never propagate AA txs to peers (no alloy pooled-tx representation; SCI gossip of
-        // AA is intentionally disabled).
-        if is_aa {
+        // By default, never propagate AA txs to peers (SCI gossip of AA is intentionally
+        // disabled — "local-only"). The `SCI_AA_GOSSIP` gate flips this for the decentralization
+        // experiment: when enabled, AA txs follow the inner validator's `propagate` flag like any
+        // other tx. The pooled type already 2718-encodes/decodes the AA variant (macro-derived),
+        // and the pool<->network conversions go through `into_base_envelope` / `try_into_pooled`,
+        // so gossip never hits the alloy-conversion `unreachable!` sites in `pooled.rs`.
+        if is_aa && !*AA_GOSSIP_ENABLED {
             if let TransactionValidationOutcome::Valid { propagate, .. } = &mut outcome {
                 *propagate = false;
             }
