@@ -8,7 +8,11 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 mod validator;
-pub use validator::{BaseL1BlockInfo, BaseTransactionValidator, BaseTxPoolError};
+pub use validator::{
+    BaseL1BlockInfo, BaseTransactionValidator, BaseTxPoolError, MAX_AA_ACCESS_LIST_ACCOUNTS,
+    MAX_AA_ACCESS_LIST_STORAGE_KEYS_TOTAL, MAX_AA_CALL_INPUT_SIZE, MAX_AA_CALLS,
+    MAX_AA_STORAGE_KEYS_PER_ACCOUNT,
+};
 
 mod transaction;
 pub use transaction::{

@@ -27,7 +27,7 @@ use reth_transaction_pool::{
 
 use crate::BasePooledTx;
 
-/// Experimental (decentralization gap analysis, `sci/docs/test/plan-a-decentralization-gap.md`):
+/// Experimental (decentralization gap analysis, `sci/docs/plan-a-decentralization-gap.md`):
 /// when `SCI_AA_GOSSIP=1` (or `true`), AA `0x76` transactions are allowed to propagate to peers
 /// instead of being forced `propagate = false`. Default (unset) keeps the production local-only
 /// behavior. Read once at startup. This gate exists to A/B the "de-local-only" hypothesis on a
@@ -37,6 +37,22 @@ static AA_GOSSIP_ENABLED: LazyLock<bool> = LazyLock::new(|| {
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false)
 });
+
+/// Maximum number of inner calls in an AA (`0x76`) transaction batch.
+///
+/// Pool-only DoS limit (see [`BaseTransactionValidator::ensure_aa_field_limits`]): bounds the
+/// AA call batch and access-list cardinality at admission rather than at RLP decoding, so the
+/// core tx format stays flexible and a peer sending an oversized AA tx can be penalized.
+/// Mirrors the caps in Tempo's `crates/transaction-pool/src/validator.rs`.
+pub const MAX_AA_CALLS: usize = 32;
+/// Maximum calldata size (bytes) of a single inner AA call.
+pub const MAX_AA_CALL_INPUT_SIZE: usize = 128 * 1024;
+/// Maximum number of access-list accounts in an AA transaction.
+pub const MAX_AA_ACCESS_LIST_ACCOUNTS: usize = 256;
+/// Maximum storage keys per access-list account in an AA transaction.
+pub const MAX_AA_STORAGE_KEYS_PER_ACCOUNT: usize = 256;
+/// Maximum total storage keys across an AA transaction's whole access list.
+pub const MAX_AA_ACCESS_LIST_STORAGE_KEYS_TOTAL: usize = 2048;
 
 /// Base-specific transaction pool validation errors.
 #[derive(Debug, thiserror::Error)]
@@ -50,6 +66,52 @@ pub enum BaseTxPoolError {
         transaction_da_footprint: u64,
         /// The current block gas limit.
         block_gas_limit: u64,
+    },
+    /// An AA transaction's call batch exceeds [`MAX_AA_CALLS`].
+    #[error("AA transaction has too many calls ({count} > {max_allowed})")]
+    TooManyAaCalls {
+        /// The number of calls in the AA batch.
+        count: usize,
+        /// The maximum allowed ([`MAX_AA_CALLS`]).
+        max_allowed: usize,
+    },
+    /// An AA inner call's calldata exceeds [`MAX_AA_CALL_INPUT_SIZE`].
+    #[error("AA call {call_index} input too large ({size} > {max_allowed} bytes)")]
+    AaCallInputTooLarge {
+        /// Index of the offending call within the batch.
+        call_index: usize,
+        /// The call's calldata size in bytes.
+        size: usize,
+        /// The maximum allowed ([`MAX_AA_CALL_INPUT_SIZE`]).
+        max_allowed: usize,
+    },
+    /// An AA transaction's access list exceeds [`MAX_AA_ACCESS_LIST_ACCOUNTS`].
+    #[error("AA transaction access list has too many accounts ({count} > {max_allowed})")]
+    TooManyAaAccessListAccounts {
+        /// The number of access-list accounts.
+        count: usize,
+        /// The maximum allowed ([`MAX_AA_ACCESS_LIST_ACCOUNTS`]).
+        max_allowed: usize,
+    },
+    /// An AA access-list account exceeds [`MAX_AA_STORAGE_KEYS_PER_ACCOUNT`].
+    #[error(
+        "AA access-list account {account_index} has too many storage keys ({count} > {max_allowed})"
+    )]
+    TooManyAaStorageKeysPerAccount {
+        /// Index of the offending access-list account.
+        account_index: usize,
+        /// The number of storage keys for that account.
+        count: usize,
+        /// The maximum allowed ([`MAX_AA_STORAGE_KEYS_PER_ACCOUNT`]).
+        max_allowed: usize,
+    },
+    /// An AA transaction's access list exceeds [`MAX_AA_ACCESS_LIST_STORAGE_KEYS_TOTAL`].
+    #[error("AA transaction access list has too many total storage keys ({count} > {max_allowed})")]
+    TooManyAaTotalStorageKeys {
+        /// The total number of storage keys across the access list.
+        count: usize,
+        /// The maximum allowed ([`MAX_AA_ACCESS_LIST_STORAGE_KEYS_TOTAL`]).
+        max_allowed: usize,
     },
 }
 
@@ -193,6 +255,62 @@ where
     ///
     /// This allows reusing the same state provider across multiple transaction validations.
     ///
+    /// Pool-only DoS field limits for AA (`0x76`) transactions: bounds the call batch and the
+    /// access-list cardinality so a malicious peer cannot cheaply force expensive validation or
+    /// bloat the pool with an oversized AA tx. No-op for non-AA transactions. Errors are
+    /// [`BaseTxPoolError`] (`is_bad_transaction = true`), so an offending peer can be penalized.
+    /// Mirrors Tempo's `ensure_aa_field_limits`.
+    pub fn ensure_aa_field_limits(transaction: &Tx) -> Result<(), BaseTxPoolError> {
+        let Some(aa) = transaction.aa() else {
+            return Ok(());
+        };
+
+        if aa.calls.len() > MAX_AA_CALLS {
+            return Err(BaseTxPoolError::TooManyAaCalls {
+                count: aa.calls.len(),
+                max_allowed: MAX_AA_CALLS,
+            });
+        }
+
+        for (call_index, call) in aa.calls.iter().enumerate() {
+            if call.input.len() > MAX_AA_CALL_INPUT_SIZE {
+                return Err(BaseTxPoolError::AaCallInputTooLarge {
+                    call_index,
+                    size: call.input.len(),
+                    max_allowed: MAX_AA_CALL_INPUT_SIZE,
+                });
+            }
+        }
+
+        if aa.access_list.len() > MAX_AA_ACCESS_LIST_ACCOUNTS {
+            return Err(BaseTxPoolError::TooManyAaAccessListAccounts {
+                count: aa.access_list.len(),
+                max_allowed: MAX_AA_ACCESS_LIST_ACCOUNTS,
+            });
+        }
+
+        let mut total_storage_keys = 0usize;
+        for (account_index, entry) in aa.access_list.iter().enumerate() {
+            if entry.storage_keys.len() > MAX_AA_STORAGE_KEYS_PER_ACCOUNT {
+                return Err(BaseTxPoolError::TooManyAaStorageKeysPerAccount {
+                    account_index,
+                    count: entry.storage_keys.len(),
+                    max_allowed: MAX_AA_STORAGE_KEYS_PER_ACCOUNT,
+                });
+            }
+            total_storage_keys = total_storage_keys.saturating_add(entry.storage_keys.len());
+        }
+
+        if total_storage_keys > MAX_AA_ACCESS_LIST_STORAGE_KEYS_TOTAL {
+            return Err(BaseTxPoolError::TooManyAaTotalStorageKeys {
+                count: total_storage_keys,
+                max_allowed: MAX_AA_ACCESS_LIST_STORAGE_KEYS_TOTAL,
+            });
+        }
+
+        Ok(())
+    }
+
     /// See also [`TransactionValidator::validate_transaction`]
     ///
     /// This behaves the same as [`EthTransactionValidator::validate_one_with_state`], but in
@@ -220,6 +338,18 @@ where
         // real "local-only" guarantee; admitting an AA tx from any origin is safe because it
         // still passes the keychain pre-execution hook at execution time.
         let is_aa = transaction.ty() == base_common_consensus::SCI_AA_TX_TYPE_ID;
+
+        // Pool-only DoS field limits for AA txs, checked before the (more expensive) inner
+        // validation so an oversized AA from a malicious peer is rejected cheaply and the peer
+        // can be penalized (`BaseTxPoolError::is_bad_transaction` = true).
+        if is_aa
+            && let Err(err) = Self::ensure_aa_field_limits(&transaction)
+        {
+            return TransactionValidationOutcome::Invalid(
+                transaction,
+                InvalidPoolTransactionError::other(err),
+            );
+        }
 
         let outcome = self.inner.validate_one_with_state(origin, transaction, state);
 
@@ -638,6 +768,64 @@ mod tests {
         let envelope = BaseTxEnvelope::Aa(tx.into_signed(signature));
         let len = envelope.encode_2718_len();
         (envelope.try_into_recovered().unwrap(), len)
+    }
+
+    /// An AA tx whose call batch exceeds [`MAX_AA_CALLS`] is rejected at admission (pool-only
+    /// DoS limit), so a peer flooding oversized AA txs over gossip can be penalized. See
+    /// `sci/docs/plan-a-decentralization-gap.md`.
+    #[tokio::test]
+    async fn rejects_aa_with_too_many_calls() {
+        let chain_spec = Arc::new(BaseChainSpec::mainnet());
+        let chain_id = ChainConfig::mainnet().chain_id;
+        let signer = Account::Alice.signer();
+        let tx = BaseAaTransaction {
+            chain_id,
+            nonce: 0,
+            max_priority_fee_per_gas: 0,
+            max_fee_per_gas: 1_000,
+            gas_limit: 50_000,
+            // MAX_AA_CALLS + 1 calls → over the limit.
+            calls: (0..=MAX_AA_CALLS)
+                .map(|_| Call {
+                    to: TxKind::Call(Address::random()),
+                    value: U256::from(1),
+                    input: Default::default(),
+                })
+                .collect(),
+            access_list: Default::default(),
+            fee_payer: None,
+            root: None,
+        };
+        let signature = signer.sign_hash_sync(&tx.signature_hash()).unwrap();
+        let envelope = BaseTxEnvelope::Aa(tx.into_signed(signature));
+        let len = envelope.encode_2718_len();
+        let recovered = envelope.try_into_recovered().unwrap();
+
+        let client = MockEthProvider::<BasePrimitives>::new()
+            .with_chain_spec(Arc::clone(&chain_spec))
+            .with_genesis_block();
+        client.add_account(
+            recovered.signer(),
+            ExtendedAccount::new(0, U256::from(1_000_000_000_000_000_000u128)),
+        );
+        let evm_config = BaseEvmConfig::base(Arc::clone(&chain_spec));
+        let inner = EthTransactionValidatorBuilder::new(client, evm_config)
+            .no_shanghai()
+            .no_cancun()
+            .with_custom_tx_type(base_common_consensus::SCI_AA_TX_TYPE_ID)
+            .build(InMemoryBlobStore::default());
+        let validator =
+            BaseTransactionValidator::with_block_info(inner, BaseL1BlockInfo::default());
+
+        let pooled: BasePooledTransaction = BasePooledTransaction::new(recovered, len);
+        let outcome = validator.validate_one(TransactionOrigin::External, pooled).await;
+        match outcome {
+            TransactionValidationOutcome::Invalid(_, err) => assert!(
+                err.to_string().contains("too many calls"),
+                "expected TooManyAaCalls rejection, got {err:?}"
+            ),
+            other => panic!("expected AA with >MAX_AA_CALLS calls to be rejected, got {other:?}"),
+        }
     }
 
     /// A fully-sponsored AA tx (`fee_payer == root != signer`) is admitted even though the
