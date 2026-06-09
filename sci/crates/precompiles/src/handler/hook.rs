@@ -76,6 +76,23 @@ where
     Ok(())
 }
 
+/// Reads the keychain's transient `tx_origin` slot — the symmetric reader for
+/// [`set_keychain_tx_origin`]. Used by tests (and any host that needs to confirm what the
+/// handler seeded) to observe the value `ensure_account_caller` will compare against
+/// `msg_sender`. Returns `Address::ZERO` when no origin has been seeded for this tx.
+pub fn keychain_tx_origin<EVM, ERROR>(evm: &mut EVM) -> Result<Address, ERROR>
+where
+    EVM: EvmTr<Context: ContextTr<Db: AlloyDatabase, Journal: JournalTr<Database: AlloyDatabase> + Debug>>,
+    ERROR: From<<<EVM::Context as ContextTr>::Db as Database>::Error>
+        + FromStringError
+        + From<InvalidTransaction>,
+{
+    enter_keychain_storage(evm.ctx(), || -> crate::error::Result<Address> {
+        AccountKeychain::default().tx_origin_raw()
+    })
+    .map_err(|e| ERROR::from_string(format!("keychain tx_origin read failed: {e:?}")))
+}
+
 /// AA-native keychain pre-execution hook (Plan A 2c) — the authorization gate.
 ///
 /// Driven by the AA tx itself: the `SciHandler` passes the `root` account the calls

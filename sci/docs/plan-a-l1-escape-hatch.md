@@ -90,7 +90,7 @@ Standard OP-Stack deposit-derivation pipeline (in-repo, not an external kona dep
 | Tier | Capability | Status / what it needs |
 |---|---|---|
 | **1** | Emergency freeze: root/guardian force-includes `AgentCircuitBreaker.trip(sessionKey)` from L1 to halt a rogue agent | **DONE + VERIFIED on devnet 2026-06-08** (no SCI core code change). e2e `sci/devnet/e2e/l1-escape-hatch-cb.sh` PASSES: owner force-freeze → `isTripped=true` (~20s), owner force-unfreeze → `false`, and a **non-owner force-trip is rejected** (auth holds via L1). See §4.1. |
-| **2** | Key admin: root force-includes `revokeKey` / `updateSpendingLimit` / etc. from L1 | Blocked by findings 2+3. Needs a **small, targeted handler change**: seed `tx_origin` for deposit txs too (§5). |
+| **2** | Key admin: root force-includes `revokeKey` / `updateSpendingLimit` / etc. from L1 | **IMPLEMENTED + UNIT-TESTED 2026-06-09** (devnet e2e pending). Handler now seeds `tx_origin` for deposits (`sci_handler.rs`, see §5/§5.1); two unit tests in `sci_handler.rs::tests` assert a deposit (and a system deposit) seed the keychain `tx_origin`. TEE parity automatic; ZK precompile-CALL gap tracked separately (§5.1). |
 | **3** | Delegated agent action: force-include the gated `0x76` batch (scope + limit + CB) from L1 | HARD, `0x76`-hook-only (§6). Deferred. |
 
 **Recommended order:** Tier 1 (verify + test), then Tier 2 (the handler change), then Tier 3
@@ -287,12 +287,20 @@ concrete requirement for trustless agent-action forced inclusion emerges.
 resolved. **Tier 2** (seed `tx_origin` for deposits → L1-forced key admin) and **Tier 3**
 (trustless agent-action forced inclusion) remain; recommended next is Tier 2.
 
-2026-06-09: pre-implementation design-core review of Tier 2 (no code written — see §5.1).
+2026-06-09: pre-implementation design-core review of Tier 2 (see §5.1).
 Confirmed the change is a one-line reuse of `set_keychain_tx_origin`. **Caveat A (system-deposit
 perturbation): resolved safe** — `tx_origin`/`transaction_key` are transient (TSTORE), never in
 the state root, never read by system deposits. **Caveat B (proof parity): resolved for TEE,
 deferred for ZK** — `SciHandler` is shared across every `BaseEvm` so the seeding replays
 identically, but the ZK guest (`ZkvmBaseEvmFactory`/`BaseZkvmPrecompiles`) installs no keychain
 precompile, a **pre-existing** gap affecting all keychain CALLs (not a Tier-2 regression) that
-must be closed before any ZK-proven keychain claim. Net: Tier 2 is safe to implement for
-devnet + TEE; the implementation itself remains deferred pending the go-ahead.
+must be closed before any ZK-proven keychain claim.
+
+2026-06-09 (same day, post-review): **Tier 2 implemented.** `SciHandler::
+validate_against_state_and_deduct_caller` now routes deposit txs through
+`set_keychain_tx_origin` instead of an early `Ok(())` (still skipping the `0x76` agent hook). Added
+a symmetric `tx_origin_raw()` reader (`account_keychain/sci_ext.rs`) + `keychain_tx_origin()` hook
+fn (`handler/hook.rs`) and two unit tests (`sci_handler.rs::tests`: a deposit and a system deposit
+both seed `tx_origin = caller`). Full suites green: base-common-evm 46 (was 44), sci-precompiles
+315, `cargo check -p base` clean. **Still pending: devnet e2e** (force a `revokeKey` deposit from
+the root EOA via L1, confirm the key is revoked) and the separate ZK-precompile workstream.

@@ -301,10 +301,23 @@ where
             None => self.inner.validate_against_state_and_deduct_caller(evm)?,
         }
 
-        // Deposit (system) txs invoke predeploy state ticks and must bypass the SCI
-        // keychain hook — they aren't agent txs and the keychain isn't relevant.
+        // Deposit (`0x7E`) txs bypass the SCI `0x76` agent keychain hook — they aren't agent
+        // txs (no `aa_parts`, no `root`), so the scope/limit/CB gate below does not apply.
+        // But we still seed the keychain `tx_origin` for them: this is the L1 censorship
+        // escape hatch (Tier 2). A root owner whose txs the sequencer censors can force-include
+        // a keychain admin call (`revokeKey` / `updateSpendingLimit` / ...) from L1 via
+        // `OptimismPortal.depositTransaction`; that call executes on L2 with `msg.sender` = the
+        // L1 EOA, and the keychain admin gate `ensure_account_caller` requires
+        // `tx_origin == msg_sender` (non-zero) AND `transaction_key == 0`.
+        // `set_keychain_tx_origin` seeds exactly that (origin = deposit `from`, key = 0).
+        //
+        // Safe for system deposits: `tx_origin`/`transaction_key` are transient (TSTORE) —
+        // cleared at tx end, never committed to the state root — and system deposits (L1-info,
+        // upgrades) never read them, so the seed is inert there. An EOA deposit gains only
+        // self-admin over its own `keys[msg_sender]` (no agent-delegation powers, since
+        // `transaction_key` stays 0). See `sci/docs/plan-a-l1-escape-hatch.md` §5 / §5.1.
         if evm.ctx().tx().tx_type() == DEPOSIT_TRANSACTION_TYPE {
-            return Ok(());
+            return set_keychain_tx_origin::<EVM, ERROR>(evm);
         }
 
         // Plan A 2c — AA agent-tx authorization. An AA tx with `root` set acts on behalf
@@ -527,5 +540,77 @@ where
         let mut frame_result = self.inspect_run_exec_loop(evm, first_frame_input)?;
         self.last_frame_result(evm, &mut frame_result)?;
         Ok(frame_result)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use base_common_chains::BaseUpgrade;
+    use revm::{
+        context::{Context, CfgEnv, TxEnv},
+        context_interface::result::EVMError,
+        database::InMemoryDB,
+        handler::Handler,
+        primitives::{Address, B256},
+        state::AccountInfo,
+    };
+    use sci_precompiles::keychain_tx_origin;
+
+    use super::*;
+    use crate::{BaseSpecId, BaseTransaction, Builder, DefaultBase, L1BlockInfo};
+
+    type TestError = EVMError<core::convert::Infallible, BaseTransactionError>;
+
+    /// Builds an EVM holding a single deposit (`0x7E`) tx from `caller`, runs
+    /// `SciHandler::validate_against_state_and_deduct_caller`, and returns the keychain
+    /// `tx_origin` the handler seeded. `system` toggles the L1-info/upgrade flavor.
+    fn deposit_seeded_tx_origin(caller: Address, system: bool) -> Address {
+        let mut db = InMemoryDB::default();
+        db.insert_account_info(
+            caller,
+            AccountInfo { balance: U256::from(1_000_000), ..Default::default() },
+        );
+
+        let mut builder = BaseTransaction::builder()
+            .base(TxEnv::builder().caller(caller).gas_limit(100))
+            .source_hash(B256::from([1u8; 32]));
+        if system {
+            builder = builder.is_system_transaction();
+        }
+
+        let ctx = Context::base()
+            .with_db(db)
+            .with_chain(L1BlockInfo::default())
+            .with_tx(builder.build_fill())
+            .with_cfg(CfgEnv::new_with_spec(BaseSpecId::new(BaseUpgrade::Regolith)));
+
+        let mut evm = ctx.build_base();
+        let handler = SciHandler::<_, TestError, EthFrame<EthInterpreter>>::new();
+        handler.validate_against_state_and_deduct_caller(&mut evm).unwrap();
+        keychain_tx_origin::<_, TestError>(&mut evm).unwrap()
+    }
+
+    /// Tier 2 (L1 escape hatch): a deposit tx must seed the keychain `tx_origin` to its
+    /// caller, so a force-included keychain admin call (`revokeKey` / ...) from an L1 EOA
+    /// passes `ensure_account_caller` (which requires `tx_origin == msg_sender`, non-zero).
+    /// Before Tier 2 the deposit short-circuited and left `tx_origin == ZERO`.
+    #[test]
+    fn deposit_seeds_keychain_tx_origin() {
+        let caller = Address::from([0x11; 20]);
+        assert_eq!(
+            deposit_seeded_tx_origin(caller, false),
+            caller,
+            "deposit must seed keychain tx_origin = deposit caller"
+        );
+    }
+
+    /// A system deposit (L1-info / predeploy upgrade tick) must also flow through the
+    /// seeding path without faulting. The seed is inert there (system deposits never read
+    /// the keychain) — `tx_origin`/`transaction_key` are transient (TSTORE), so this does
+    /// not perturb the state root. See `sci/docs/plan-a-l1-escape-hatch.md` §5.1.
+    #[test]
+    fn system_deposit_seeds_without_faulting() {
+        let caller = Address::from([0x22; 20]);
+        assert_eq!(deposit_seeded_tx_origin(caller, true), caller);
     }
 }

@@ -37,8 +37,8 @@ pub use sci_agent_state::SciAgentState;
 
 pub mod handler;
 pub use handler::{
-    AaCall, HookOutcome, apply_aa_post_execution_deductions, run_aa_keychain_hook,
-    set_keychain_tx_origin,
+    AaCall, HookOutcome, apply_aa_post_execution_deductions, keychain_tx_origin,
+    run_aa_keychain_hook, set_keychain_tx_origin,
 };
 
 #[cfg(any(test, feature = "test-utils"))]

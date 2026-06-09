@@ -106,8 +106,13 @@ sci-chain/
      `crates/common/evm/src/api/exec.rs`; v0.9 restructured `exec.rs` into a
      trait-alias-only module and moved the handler instantiations here.) System-call
      paths still get `SciHandler`, but its `validate_against_state_and_deduct_caller`
-     early-returns on `tx_type == DEPOSIT_TRANSACTION_TYPE` so OP-Stack predeploy ticks
-     bypass the keychain hook.
+     short-circuits the `0x76` agent keychain hook on `tx_type == DEPOSIT_TRANSACTION_TYPE`
+     so OP-Stack predeploy ticks bypass the per-call scope/limit/CB gate. (As of the L1
+     escape-hatch Tier 2 work it does **not** fully early-return for deposits: it still seeds
+     the keychain transient `tx_origin = tx.caller` via `set_keychain_tx_origin` so a
+     force-included keychain admin call from L1 passes `ensure_account_caller` — see
+     `sci/docs/plan-a-l1-escape-hatch.md` §5. The seed is transient (TSTORE), so it does not
+     perturb system-deposit state roots.)
    - `etc/docker/devnet-env` — Chain ID 42001 (note: as of the v0.9 uplift this
      override is documented but not yet applied to the file — the line still reads
      `L2_CHAIN_ID=84538453`; a follow-up should reconcile docs vs. file).

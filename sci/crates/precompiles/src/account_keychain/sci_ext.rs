@@ -65,4 +65,14 @@ impl AccountKeychain {
     pub fn transaction_key_raw(&self) -> Result<Address> {
         self.transaction_key.t_read()
     }
+
+    /// Reads the transient `tx_origin` slot raw — the symmetric reader for
+    /// [`AccountKeychain::set_tx_origin`]. The handler seeds this in
+    /// `validate_against_state_and_deduct_caller` (for normal txs, AA agent txs, and —
+    /// per the L1 escape hatch, Tier 2 — deposit txs); the keychain admin gate
+    /// `ensure_account_caller` reads it to require `tx_origin == msg_sender`. Returns
+    /// `Address::ZERO` when no origin has been seeded for the current transaction.
+    pub fn tx_origin_raw(&self) -> Result<Address> {
+        self.tx_origin.t_read()
+    }
 }
