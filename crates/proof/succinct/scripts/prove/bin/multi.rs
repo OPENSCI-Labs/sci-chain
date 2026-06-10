@@ -28,7 +28,31 @@ use sp1_sdk::{
     Elf, ProveRequest, Prover, utils,
     blocking::{CpuProver, ProveRequest as BlockingProveRequest, Prover as BlockingProver},
 };
+#[cfg(feature = "cuda")]
+use sp1_sdk::ProverClient;
 use tracing::{debug, info, warn};
+
+/// Which final proof artifact to produce, selected by the `PROOF_MODE` env var.
+#[derive(Debug, Clone, Copy)]
+enum ProofMode {
+    Compressed,
+    Groth16,
+    Plonk,
+}
+
+impl ProofMode {
+    /// Reads `PROOF_MODE` (default `compressed`); errors on an unknown value.
+    fn from_env() -> Result<Self> {
+        match env::var("PROOF_MODE").unwrap_or_else(|_| "compressed".to_string()).as_str() {
+            "compressed" => Ok(Self::Compressed),
+            "groth16" => Ok(Self::Groth16),
+            "plonk" => Ok(Self::Plonk),
+            other => {
+                anyhow::bail!("unknown PROOF_MODE={other:?}; expected compressed|groth16|plonk")
+            }
+        }
+    }
+}
 
 /// Execute the Succinct program for multiple blocks.
 #[tokio::main]
@@ -109,22 +133,56 @@ async fn main() -> Result<()> {
             let path = save_range_proof(l2_chain_id, l2_start_block, l2_end_block, &proof)?;
             info!("Range proof saved to {}", path.display());
         } else if env::var("SP1_PROVER").as_deref() == Ok("cpu") {
-            // Local CPU compressed proof — no prover network/cluster required (SP1_PROVER=cpu).
+            // Local CPU proof — no prover network/cluster required (SP1_PROVER=cpu).
             // CpuProver is synchronous and CPU-bound, so run it on a blocking thread to keep
             // the async runtime responsive; errors propagate through the JoinHandle via await??.
+            let proof_mode = ProofMode::from_env()?;
+            info!(?proof_mode, "Generating local CPU proof (no prover network)");
             let prove_start = Instant::now();
             let proof = tokio::task::spawn_blocking(move || -> Result<_> {
                 let prover = CpuProver::new();
                 let pk = BlockingProver::setup(&prover, Elf::Static(get_range_elf_embedded()))
                     .map_err(|e| anyhow::anyhow!("range ELF setup failed: {e:?}"))?;
                 let req = BlockingProver::prove(&prover, &pk, sp1_stdin);
-                BlockingProveRequest::run(BlockingProveRequest::compressed(req))
-                    .map_err(|e| anyhow::anyhow!("CPU compressed proving failed: {e:?}"))
+                let req = match proof_mode {
+                    ProofMode::Compressed => BlockingProveRequest::compressed(req),
+                    ProofMode::Groth16 => BlockingProveRequest::groth16(req),
+                    ProofMode::Plonk => BlockingProveRequest::plonk(req),
+                };
+                BlockingProveRequest::run(req)
+                    .map_err(|e| anyhow::anyhow!("CPU proving failed: {e:?}"))
             })
             .await??;
-            info!(elapsed = ?prove_start.elapsed(), "CPU compressed proof generated");
+            info!(elapsed = ?prove_start.elapsed(), ?proof_mode, "CPU proof generated");
             let path = save_range_proof(l2_chain_id, l2_start_block, l2_end_block, &proof)?;
-            info!("CPU compressed range proof saved to {}", path.display());
+            info!("CPU range proof saved to {}", path.display());
+        } else if env::var("SP1_PROVER").as_deref() == Ok("cuda") {
+            // Local NVIDIA GPU proof via SP1's CUDA prover (talks to the sp1-gpu docker
+            // container). Async, not CPU-bound, so it runs directly on the runtime. Requires
+            // building with `--features cuda`; the `.cuda()` builder is gated on sp1-sdk/cuda.
+            #[cfg(not(feature = "cuda"))]
+            anyhow::bail!(
+                "SP1_PROVER=cuda requires building `multi` with `--features cuda` (enables \
+                 sp1-sdk/cuda). Rebuild: cargo build --release -p base-proof-succinct-prove \
+                 --bin multi --features cuda"
+            );
+            #[cfg(feature = "cuda")]
+            {
+                let proof_mode = ProofMode::from_env()?;
+                info!(?proof_mode, "Generating CUDA proof on local NVIDIA GPU");
+                let prove_start = Instant::now();
+                let prover = ProverClient::builder().cuda().build().await;
+                let pk = prover.setup(Elf::Static(get_range_elf_embedded())).await?;
+                let proof = match proof_mode {
+                    ProofMode::Compressed => prover.prove(&pk, sp1_stdin).compressed().await,
+                    ProofMode::Groth16 => prover.prove(&pk, sp1_stdin).groth16().await,
+                    ProofMode::Plonk => prover.prove(&pk, sp1_stdin).plonk().await,
+                }
+                .map_err(|e| anyhow::anyhow!("CUDA proving failed: {e:?}"))?;
+                info!(elapsed = ?prove_start.elapsed(), ?proof_mode, "CUDA proof generated");
+                let path = save_range_proof(l2_chain_id, l2_start_block, l2_end_block, &proof)?;
+                info!("CUDA range proof saved to {}", path.display());
+            }
         } else {
             let range_proof_strategy = parse_fulfillment_strategy(
                 env::var("RANGE_PROOF_STRATEGY").unwrap_or_else(|_| "reserved".to_string()),
