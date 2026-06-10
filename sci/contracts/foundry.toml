@@ -10,10 +10,11 @@ solc_version = "0.8.28"
 evm_version = "cancun"
 optimizer = true
 optimizer_runs = 200
-# via_ir = true keeps `script/integration/AgentTransferFlow.s.sol` compileable —
-# its nested-struct authorizeKey calldata trips the legacy code generator's
-# stack limit. First compile is ~30s; cached thereafter. Tests don't pay any
-# runtime cost. NOTE: this changes generated runtime bytecode vs. earlier
+# via_ir = true keeps the nested-struct `authorizeKey(address,uint8,KeyRestrictions)`
+# calldata in `test/integration/base/DevnetBase.sol` (authorizeUnrestricted) and
+# `test/integration/Registry.t.sol` compileable — it trips the legacy code
+# generator's stack limit. First compile is ~30s; cached thereafter. Tests don't
+# pay any runtime cost. NOTE: this changes generated runtime bytecode vs. earlier
 # no-via_ir builds, so `test/integration/DeploymentParity.t.sol` only passes
 # when the on-chain predeploys were baked with the SAME via_ir setting; see
 # that file's header for the opt-in toggle.

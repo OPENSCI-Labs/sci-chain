@@ -20,8 +20,9 @@ import { MockSciAgentState } from "../../mocks/MockSciAgentState.sol";
 ///   forked anvil cannot reproduce. We therefore `vm.etch` mock implementations
 ///   over those addresses at setUp so cross-contract calls keep working.
 /// * Tests that need the real Rust pre-execution hook (CircuitBreaker check inside
-///   the hook, scope/spending-limit enforcement) live in `script/integration/`
-///   instead and run via `forge script --broadcast` against the real chain.
+///   the hook, scope/spending-limit enforcement) live in `sci/devnet/e2e/` as
+///   shell scripts (e.g. `e2e-loop.sh`) that drive native AA (`0x76`) txs against
+///   the real chain — see the runbook `sci/docs/plan-a-aa-e2e.md`.
 ///
 /// To run:
 ///     forge test --fork-url $L2_RPC --match-path 'test/integration/**'
