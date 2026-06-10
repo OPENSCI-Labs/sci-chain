@@ -8,20 +8,26 @@ import test from "node:test";
 
 import { decodeFunctionData } from "viem";
 
-import { accountKeychainAbi, erc20Abi } from "../src/abi.js";
+import { accountKeychainAbi, agentAccessKeyRegistryAbi, erc20Abi } from "../src/abi.js";
 import {
   type KeyRestrictions,
   authorizeKeyCall,
+  bindKeyCall,
   circuitBreakerTripCall,
   circuitBreakerUntripCall,
   erc20ApproveCall,
   erc20TransferCall,
   nativeTransferCall,
+  registerAgentKeyCalls,
+  removeAllowedCallsCall,
   revokeKeyCall,
+  setAllowedCallsCall,
+  unbindKeyCall,
   updateSpendingLimitCall,
 } from "../src/calls.js";
 import {
   ACCOUNT_KEYCHAIN_ADDRESS,
+  AGENT_ACCESS_KEY_REGISTRY_ADDRESS,
   AGENT_CIRCUIT_BREAKER_ADDRESS,
 } from "../src/constants.js";
 
@@ -89,4 +95,75 @@ test("circuitBreaker trip/untrip selectors + target", () => {
   const untrip = circuitBreakerUntripCall(KEY);
   assert.equal(untrip.to, AGENT_CIRCUIT_BREAKER_ADDRESS);
   assert.equal(selectorOf(untrip.input), "0x81836e78");
+});
+
+const SCOPES = [
+  {
+    target: TOKEN,
+    selectorRules: [{ selector: "0xa9059cbb" as const, recipients: [TO] }],
+  },
+];
+
+test("setAllowedCallsCall selector + round-trip", () => {
+  const call = setAllowedCallsCall(KEY, SCOPES);
+  assert.equal(call.to, ACCOUNT_KEYCHAIN_ADDRESS);
+  assert.equal(selectorOf(call.input), "0xf5456703");
+  const { functionName, args } = decodeFunctionData({ abi: accountKeychainAbi, data: call.input });
+  assert.equal(functionName, "setAllowedCalls");
+  assert.equal(args[0], KEY);
+  assert.equal(args[1][0].target, TOKEN);
+  assert.equal(args[1][0].selectorRules[0].selector, "0xa9059cbb");
+});
+
+test("removeAllowedCallsCall selector", () => {
+  const call = removeAllowedCallsCall(KEY, TOKEN);
+  assert.equal(call.to, ACCOUNT_KEYCHAIN_ADDRESS);
+  assert.equal(selectorOf(call.input), "0xf3941811");
+});
+
+const AGENT_ID = `0x${"ab".repeat(32)}` as const;
+
+test("bindKeyCall selector + round-trip", () => {
+  const call = bindKeyCall(KEY, AGENT_ID);
+  assert.equal(call.to, AGENT_ACCESS_KEY_REGISTRY_ADDRESS);
+  assert.equal(selectorOf(call.input), "0x0c9f2503");
+  const { functionName, args } = decodeFunctionData({
+    abi: agentAccessKeyRegistryAbi,
+    data: call.input,
+  });
+  assert.equal(functionName, "bindKey");
+  assert.deepEqual(args, [KEY, AGENT_ID]);
+});
+
+test("unbindKeyCall selector", () => {
+  const call = unbindKeyCall(KEY);
+  assert.equal(call.to, AGENT_ACCESS_KEY_REGISTRY_ADDRESS);
+  assert.equal(selectorOf(call.input), "0x25ba716f");
+});
+
+const UNRESTRICTED: KeyRestrictions = {
+  expiry: 2n ** 64n - 1n,
+  enforceLimits: false,
+  limits: [],
+  allowAnyCalls: true,
+  allowedCalls: [],
+};
+
+test("registerAgentKeyCalls — authorizeKey only when no agentId", () => {
+  const calls = registerAgentKeyCalls({ keyId: KEY, restrictions: UNRESTRICTED });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].to, ACCOUNT_KEYCHAIN_ADDRESS);
+  assert.equal(selectorOf(calls[0].input), "0x980a6025"); // authorizeKey (T3)
+});
+
+test("registerAgentKeyCalls — authorizeKey + bindKey when agentId given", () => {
+  const calls = registerAgentKeyCalls({
+    keyId: KEY,
+    restrictions: UNRESTRICTED,
+    agentId: AGENT_ID,
+  });
+  assert.equal(calls.length, 2);
+  assert.equal(selectorOf(calls[0].input), "0x980a6025"); // authorizeKey
+  assert.equal(calls[1].to, AGENT_ACCESS_KEY_REGISTRY_ADDRESS);
+  assert.equal(selectorOf(calls[1].input), "0x0c9f2503"); // bindKey
 });

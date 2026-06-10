@@ -20,7 +20,12 @@ export {
   SIGNATURE_TYPE_SECP256K1,
 } from "./constants.js";
 
-export { erc20Abi, accountKeychainAbi, agentCircuitBreakerAbi } from "./abi.js";
+export {
+  erc20Abi,
+  accountKeychainAbi,
+  agentCircuitBreakerAbi,
+  agentAccessKeyRegistryAbi,
+} from "./abi.js";
 
 export {
   type SelectorRule,
@@ -34,8 +39,19 @@ export {
   authorizeKeyCall,
   revokeKeyCall,
   updateSpendingLimitCall,
+  setAllowedCallsCall,
+  removeAllowedCallsCall,
+  bindKeyCall,
+  unbindKeyCall,
+  registerAgentKeyCalls,
   circuitBreakerTripCall,
   circuitBreakerUntripCall,
 } from "./calls.js";
+
+export {
+  agentEventsAbi,
+  type DecodedAgentEvent,
+  decodeAgentEvents,
+} from "./events.js";
 
 export { SciAaClient, type SciAaClientConfig, type SendAaOptions } from "./client.js";

@@ -17,9 +17,15 @@ import { privateKeyToAccount } from "viem/accounts";
 
 import type { AaTransaction, AccessListItem, AaCall, SignedAaTransaction } from "./aa.js";
 import { signAaTransaction } from "./aa.js";
-import { accountKeychainAbi, agentCircuitBreakerAbi } from "./abi.js";
+import {
+  accountKeychainAbi,
+  agentAccessKeyRegistryAbi,
+  agentCircuitBreakerAbi,
+} from "./abi.js";
+import { type KeyRestrictions, registerAgentKeyCalls } from "./calls.js";
 import {
   ACCOUNT_KEYCHAIN_ADDRESS,
+  AGENT_ACCESS_KEY_REGISTRY_ADDRESS,
   AGENT_CIRCUIT_BREAKER_ADDRESS,
 } from "./constants.js";
 
@@ -126,6 +132,32 @@ export class SciAaClient {
     return this.client.sendRawTransaction({ serializedTransaction: raw });
   }
 
+  /**
+   * Registers a session key under the **Option B** path: authorizes `keyId` on the keychain
+   * (and optionally binds `agentId` in the registry) in a single AA tx.
+   *
+   * The batch is sent as a `root`-unset AA tx, so its calls execute as the signer — therefore
+   * **this client must be constructed with the *root* account's private key**, not the session
+   * key's. (Registration bootstraps the key, so it cannot be delegated through `root`.)
+   */
+  async registerKey(params: {
+    keyId: Hex;
+    restrictions: KeyRestrictions;
+    agentId?: Hex | null;
+    nonce?: number;
+    gasLimit?: bigint;
+    maxFeePerGas?: bigint;
+    maxPriorityFeePerGas?: bigint;
+  }): Promise<Hex> {
+    return this.send({
+      calls: registerAgentKeyCalls(params),
+      nonce: params.nonce,
+      gasLimit: params.gasLimit,
+      maxFeePerGas: params.maxFeePerGas,
+      maxPriorityFeePerGas: params.maxPriorityFeePerGas,
+    });
+  }
+
   /** Waits for the transaction receipt. */
   async waitForReceipt(hash: Hex): Promise<TransactionReceipt> {
     return this.client.waitForTransactionReceipt({ hash });
@@ -148,6 +180,56 @@ export class SciAaClient {
       abi: accountKeychainAbi,
       functionName: "getRemainingLimit",
       args: [account, keyId, token],
+    });
+  }
+
+  /** Reads the remaining spending limit plus the current period's end (unix seconds). */
+  async getRemainingLimitWithPeriod(account: Hex, keyId: Hex, token: Hex) {
+    return this.client.readContract({
+      address: ACCOUNT_KEYCHAIN_ADDRESS,
+      abi: accountKeychainAbi,
+      functionName: "getRemainingLimitWithPeriod",
+      args: [account, keyId, token],
+    });
+  }
+
+  /** Reads the call scopes for `keys[account][keyId]` (`isScoped` false → unrestricted). */
+  async getAllowedCalls(account: Hex, keyId: Hex) {
+    return this.client.readContract({
+      address: ACCOUNT_KEYCHAIN_ADDRESS,
+      abi: accountKeychainAbi,
+      functionName: "getAllowedCalls",
+      args: [account, keyId],
+    });
+  }
+
+  /** Reads the registry binding for `keyId` (agentId / account / registeredAt / revoked). */
+  async getBinding(keyId: Hex) {
+    return this.client.readContract({
+      address: AGENT_ACCESS_KEY_REGISTRY_ADDRESS,
+      abi: agentAccessKeyRegistryAbi,
+      functionName: "getBinding",
+      args: [keyId],
+    });
+  }
+
+  /** Returns whether `keyId` is currently bound to an agent in the registry. */
+  async isBound(keyId: Hex): Promise<boolean> {
+    return this.client.readContract({
+      address: AGENT_ACCESS_KEY_REGISTRY_ADDRESS,
+      abi: agentAccessKeyRegistryAbi,
+      functionName: "isBound",
+      args: [keyId],
+    });
+  }
+
+  /** Reads the off-chain `agentId` bound to `keyId` (zero if unbound). */
+  async agentIdOf(keyId: Hex): Promise<Hex> {
+    return this.client.readContract({
+      address: AGENT_ACCESS_KEY_REGISTRY_ADDRESS,
+      abi: agentAccessKeyRegistryAbi,
+      functionName: "agentIdOf",
+      args: [keyId],
     });
   }
 

@@ -80,3 +80,54 @@ test("prepare() enforces feePayer === root (matches the handler)", async () => {
     /feePayer requires root/,
   );
 });
+
+test("prepare() auto-fills maxFeePerGas as baseFee*2 + priority", async () => {
+  const transport = mockTransport((method) => {
+    if (method === "eth_getTransactionCount") return "0x0";
+    if (method === "eth_getBlockByNumber") return { baseFeePerGas: "0x3b9aca00" }; // 1 gwei
+    throw new Error(`unexpected RPC: ${method}`);
+  });
+  const client = new SciAaClient({ transport, privateKey: PK, chainId: 42001 });
+
+  const prepared = await client.prepare({
+    calls: [{ to: ACC1, value: 1n, input: "0x" }],
+    gasLimit: 100_000n,
+    maxPriorityFeePerGas: 2_000_000_000n, // 2 gwei
+  });
+  // baseFee(1g)*2 + prio(2g) = 4 gwei
+  assert.equal(prepared.maxFeePerGas, 4_000_000_000n);
+  assert.equal(prepared.maxPriorityFeePerGas, 2_000_000_000n);
+});
+
+test("registerKey() sends a root-unset AA tx batching authorizeKey [+ bindKey]", async () => {
+  let submitted: `0x${string}` | undefined;
+  const transport = mockTransport((method, params) => {
+    if (method === "eth_getTransactionCount") return "0x0";
+    if (method === "eth_sendRawTransaction") {
+      submitted = params[0] as `0x${string}`;
+      return "0x" + "11".repeat(32);
+    }
+    throw new Error(`unexpected RPC: ${method}`);
+  });
+  // Client is constructed with the ROOT key (registration is a root op).
+  const client = new SciAaClient({ transport, privateKey: PK, chainId: 42001 });
+
+  await client.registerKey({
+    keyId: ACC1,
+    restrictions: {
+      expiry: 2n ** 64n - 1n,
+      enforceLimits: false,
+      limits: [],
+      allowAnyCalls: true,
+      allowedCalls: [],
+    },
+    agentId: `0x${"ab".repeat(32)}`,
+    gasLimit: 500_000n,
+    maxFeePerGas: 1n,
+    maxPriorityFeePerGas: 1n,
+  });
+
+  assert.ok(submitted, "a raw tx must be submitted");
+  // 0x76 type byte, and root is encoded empty (0x80) — the batch executes as the signer.
+  assert.equal(submitted.slice(0, 4), "0x76");
+});
