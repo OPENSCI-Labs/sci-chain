@@ -184,9 +184,16 @@ vectors for access-list/CREATE need `aa-txgen` flags), the L-12 remainder
 - SDK (`sci/sdk`): 27 tests pass; golden byte-parity with `sci-aa-txgen` unchanged.
 - All Plan A Phase 1–6 flows devnet-verified (per the phase tracker in
   `docs/test/plan-a-status.md`, gitignored).
-- Integration test `sci/devnet/e2e/p1-p5-integration.sh` (27 assertions incl. edge cases)
-  passes against a live devnet sequencer. (Re-run pending after the M-3 admission gate —
-  sponsored sends must wait for `authorizeKey` inclusion.)
+- **Full post-review redeploy verified on the GPU devnet (2026-06-11):** images rebuilt
+  from this branch on the box, fresh genesis via `deploy-fresh.sh` (M-4 allocs baked —
+  `GAS_TOKEN()`/`gasBudget()` resolve), then:
+  - `p1-p5-integration.sh`: **27/27 PASS** — every rejected case behaves correctly under
+    the M-3 admission gate (sponsored sends wait for `authorizeKey` inclusion).
+  - M-3 verified live: an unauthorized sponsored `0x76` is rejected at
+    `eth_sendRawTransaction` with "no active keychain key for root …" (never pooled).
+  - forge integration (fork, `CHECK_BYTECODE_PARITY=1`): **45/45 PASS** — DeploymentParity
+    3/3 byte-match (the 2026-06-10 drift is gone) and the Invariants suite runs with
+    `reverts: 0` (ghost model actually driving state).
 
 ## 9. TBD — agent-facing tooling (send AA txs without `sci-aa-txgen`)
 
