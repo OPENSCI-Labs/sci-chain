@@ -28,8 +28,8 @@ contract StressTest is DevnetBase {
             vm.prank(ALICE);
             AgentAccessKeyRegistry(REGISTRY).bindKey(sk, agentId);
 
-            assertTrue(AgentAccessKeyRegistry(REGISTRY).isBound(sk));
-            assertEq(AgentAccessKeyRegistry(REGISTRY).agentIdOf(sk), agentId);
+            assertTrue(AgentAccessKeyRegistry(REGISTRY).isBound(ALICE, sk));
+            assertEq(AgentAccessKeyRegistry(REGISTRY).agentIdOf(ALICE, sk), agentId);
         }
     }
 
@@ -78,8 +78,8 @@ contract StressTest is DevnetBase {
         for (uint256 i; i < n; ++i) {
             vm.prank(ALICE);
             AgentAccessKeyRegistry(REGISTRY).unbindKey(keys[i]);
-            assertFalse(AgentAccessKeyRegistry(REGISTRY).isBound(keys[i]));
-            assertEq(AgentAccessKeyRegistry(REGISTRY).agentIdOf(keys[i]), bytes32(0));
+            assertFalse(AgentAccessKeyRegistry(REGISTRY).isBound(ALICE, keys[i]));
+            assertEq(AgentAccessKeyRegistry(REGISTRY).agentIdOf(ALICE, keys[i]), bytes32(0));
         }
     }
 

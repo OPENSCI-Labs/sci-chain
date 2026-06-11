@@ -30,11 +30,11 @@ contract RegistryIntegrationTest is DevnetBase {
         vm.prank(ALICE);
         AgentAccessKeyRegistry(REGISTRY).bindKey(sk, agentId);
 
-        assertTrue(AgentAccessKeyRegistry(REGISTRY).isBound(sk));
-        assertEq(AgentAccessKeyRegistry(REGISTRY).agentIdOf(sk), agentId);
+        assertTrue(AgentAccessKeyRegistry(REGISTRY).isBound(ALICE, sk));
+        assertEq(AgentAccessKeyRegistry(REGISTRY).agentIdOf(ALICE, sk), agentId);
 
         IAgentAccessKeyRegistry.Binding memory b =
-            AgentAccessKeyRegistry(REGISTRY).getBinding(sk);
+            AgentAccessKeyRegistry(REGISTRY).getBinding(ALICE, sk);
         assertEq(b.agentId, agentId);
         assertEq(b.account, ALICE);
         assertFalse(b.revoked);
@@ -89,7 +89,7 @@ contract RegistryIntegrationTest is DevnetBase {
         AgentAccessKeyRegistry(REGISTRY).bindKey(sk, id("agent-2"));
         vm.stopPrank();
 
-        assertEq(AgentAccessKeyRegistry(REGISTRY).agentIdOf(sk), id("agent-2"));
+        assertEq(AgentAccessKeyRegistry(REGISTRY).agentIdOf(ALICE, sk), id("agent-2"));
     }
 
     function test_Unbind_RevertsIfNotBound() public {
@@ -106,10 +106,13 @@ contract RegistryIntegrationTest is DevnetBase {
         vm.prank(ALICE);
         AgentAccessKeyRegistry(REGISTRY).bindKey(sk, id("agent-1"));
 
-        // Charlie tries to unbind alice's binding.
+        // Charlie tries to unbind alice's binding. Bindings are keyed per account
+        // (M-5), so from charlie's slot there is nothing to unbind.
         vm.prank(CHARLIE);
-        vm.expectRevert(IAgentAccessKeyRegistry.UnauthorizedCaller.selector);
+        vm.expectRevert(IAgentAccessKeyRegistry.NotBound.selector);
         AgentAccessKeyRegistry(REGISTRY).unbindKey(sk);
+
+        assertTrue(AgentAccessKeyRegistry(REGISTRY).isBound(ALICE, sk));
     }
 
     // -------- Fuzz tests --------
@@ -127,15 +130,15 @@ contract RegistryIntegrationTest is DevnetBase {
         // The fork preserves the registry's live storage; any keyId that's
         // already bound (e.g. from a prior cast walkthrough) would revert with
         // AlreadyBound at the second bindKey call. Skip those.
-        vm.assume(!AgentAccessKeyRegistry(REGISTRY).isBound(keyId));
+        vm.assume(!AgentAccessKeyRegistry(REGISTRY).isBound(ALICE, keyId));
 
         _seedKeychain(ALICE, keyId);
 
         vm.prank(ALICE);
         AgentAccessKeyRegistry(REGISTRY).bindKey(keyId, agentId);
 
-        assertTrue(AgentAccessKeyRegistry(REGISTRY).isBound(keyId));
-        assertEq(AgentAccessKeyRegistry(REGISTRY).agentIdOf(keyId), agentId);
+        assertTrue(AgentAccessKeyRegistry(REGISTRY).isBound(ALICE, keyId));
+        assertEq(AgentAccessKeyRegistry(REGISTRY).agentIdOf(ALICE, keyId), agentId);
     }
 
     /// agentIdOf must equal bytes32(0) after unbind for any previously bound key.
@@ -145,7 +148,7 @@ contract RegistryIntegrationTest is DevnetBase {
         vm.assume(keyId != KEYCHAIN && keyId != SCI_AGENT_STATE);
         vm.assume(keyId != REGISTRY && keyId != BUDGET);
         vm.assume(keyId != BREAKER);
-        vm.assume(!AgentAccessKeyRegistry(REGISTRY).isBound(keyId));
+        vm.assume(!AgentAccessKeyRegistry(REGISTRY).isBound(ALICE, keyId));
 
         _seedKeychain(ALICE, keyId);
 
@@ -154,7 +157,7 @@ contract RegistryIntegrationTest is DevnetBase {
         AgentAccessKeyRegistry(REGISTRY).unbindKey(keyId);
         vm.stopPrank();
 
-        assertEq(AgentAccessKeyRegistry(REGISTRY).agentIdOf(keyId), bytes32(0));
-        assertFalse(AgentAccessKeyRegistry(REGISTRY).isBound(keyId));
+        assertEq(AgentAccessKeyRegistry(REGISTRY).agentIdOf(ALICE, keyId), bytes32(0));
+        assertFalse(AgentAccessKeyRegistry(REGISTRY).isBound(ALICE, keyId));
     }
 }

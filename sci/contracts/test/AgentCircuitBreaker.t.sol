@@ -67,4 +67,14 @@ contract AgentCircuitBreakerTest is Test {
         cb.untrip(SESSION_KEY);
         assertFalse(cb.isTripped(SESSION_KEY));
     }
+
+    /// renounceOwnership is disabled — it would permanently freeze guardian management
+    /// (setGuardian is owner-only), leaving tripped keys frozen forever.
+    function test_RevertWhen_RenounceOwnership() public {
+        vm.prank(owner);
+        vm.expectRevert(IAgentCircuitBreaker.RenounceDisabled.selector);
+        cb.renounceOwnership();
+
+        assertEq(cb.owner(), owner, "ownership must be unchanged");
+    }
 }

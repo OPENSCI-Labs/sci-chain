@@ -14,6 +14,7 @@ interface IAgentCircuitBreaker {
     error UnauthorizedGuardian();
     error AlreadyAdmin();
     error ZeroAddress();
+    error RenounceDisabled();
 
     function trip(address sessionKey, bytes32 reason) external;
 

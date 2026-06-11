@@ -54,4 +54,12 @@ contract AgentCircuitBreaker is IAgentCircuitBreaker, Ownable {
         _guardians[guardian] = authorized;
         emit GuardianUpdated(guardian, authorized);
     }
+
+    /// @notice Disabled. Renouncing ownership would permanently freeze guardian
+    ///         management (`setGuardian` is owner-only), so any keys tripped at that
+    ///         point could never be untripped once guardians churn. Use
+    ///         `transferOwnership` to hand control to a new admin instead.
+    function renounceOwnership() public view override onlyOwner {
+        revert RenounceDisabled();
+    }
 }
