@@ -47,12 +47,15 @@ proptest.workspace = true
 alloy-signer.workspace = true
 alloy-signer-local.workspace = true
 alloy-primitives = { workspace = true, features = ["rand"] }
-# Integration tests drive SciHandler through BaseEvm + InMemoryDB. This is dev-only;
-# the lib itself does not depend on base-common-evm (which would create a cycle).
+# Integration tests (tests/hook_e2e.rs) drive SciHandler through BaseEvm + InMemoryDB.
+# This is dev-only; the lib itself does not depend on base-common-evm (which would
+# create a cycle).
 base-common-evm.workspace = true
 # Needed by hook_e2e.rs to construct `BaseSpecId::new(BaseUpgrade::Isthmus)` (Base v0.9
 # replaced the v0.8 `BaseSpecId::ISTHMUS` const with this builder pattern).
 base-common-chains.workspace = true
+# Needed by hook_e2e.rs for the AA `Call` type carried in `AaTransactionParts`.
+base-common-consensus.workspace = true
 
 [features]
 default = []

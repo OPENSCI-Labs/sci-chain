@@ -142,10 +142,18 @@ sci-chain/
      (first-call EIP-1559 PoC approximation).
    - `crates/execution/evm/src/receipts.rs`,
      `crates/execution/flashblocks/src/receipt_builder.rs` — AA receipt arm (EIP-1559).
-   - `crates/execution/txpool/src/validator.rs` — AA local-only: force `propagate = false`
+   - `crates/execution/txpool/src/validator.rs` (+ `Cargo.toml` adds
+     `sci-precompiles.workspace = true`) — AA local-only: force `propagate = false`
      (no gossip). Admission is NOT origin-gated — a `--txpool.nolocals` sequencer tags RPC
      txs as `External`, so an origin reject would block legitimate RPC ingress (learned on
-     devnet 2026-06-02).
+     devnet 2026-06-02). Admission IS keychain-gated for **sponsored** AA txs
+     (`check_aa_keychain_authorization`, 2026-06-10 review finding M-3): `fee_payer` must
+     equal `root` (structural — the handler rejects any other shape), and the signer must
+     have a plausibly-active `keys[root][signer]` record (raw slot read via
+     `AccountKeychain::authorized_key_slot` + `authorized_key_word_is_active` from
+     `sci_ext.rs`), else fresh zero-balance signers naming a funded victim as fee_payer
+     could stuff the pool at zero cost. Advisory only — the execution hook stays
+     authoritative; fails open on state-provider errors.
    - `crates/execution/node/src/node.rs` — register AA tx type 0x76 via
      `EthTransactionValidatorBuilder::with_custom_tx_type` so reth's inner validator does
      not reject it as `TxTypeNotSupported`.
@@ -337,7 +345,7 @@ find sci/crates/precompiles sci/crates/precompiles-macros sci/crates/precompile-
 cargo check -p sci-revm-shim -p sci-precompiles -p sci-precompiles-macros \
             -p sci-precompile-abi -p tempo-chainspec-shim
 cargo test  -p sci-precompiles --lib            # 319+ unit tests + 1 ignored
-cargo test  -p sci-precompiles --test hook_e2e  # 14 integration tests
+cargo test  -p sci-precompiles --test hook_e2e  # 13 AA-native integration tests
 ```
 
 What still requires human review on merge:
@@ -616,15 +624,19 @@ later) without touching ported Tempo files.
 the pre-execution hook does **not** write to `spending_limits` directly — instead it
 runs a **read-only pre-flight check** (sum per-token amounts across the batch, verify
 each fits in the current remaining quota via `effective_remaining_limit`). Real
-deductions are applied later by [`SciHandler::execution_result`], which only fires
-[`sci_precompiles::apply_post_execution_deductions`] when
-`frame_result.interpreter_result().result.is_ok()`. Net effect:
+deductions are applied later by [`SciHandler::execution_result`]; token / native-value
+deductions fire only when `frame_result.interpreter_result().result.is_ok()`, while the
+D-gas sentinel deduction (when `fee_payer == root`) fires **regardless of body outcome**
+— a reverting sponsored batch still burns root's real ETH for gas, so the `address(0)`
+quota must track it or deliberately-reverting batches could drain root at zero quota
+cost (2026-06-10 review finding M-1; verified by
+`tests/hook_e2e.rs::gas_quota_charged_on_revert_with_sponsored_gas`). Net effect:
 
 | Outcome | Quota effect |
 |---|---|
 | Hook rejection (scope violation, pre-flight exceeded, CB tripped) | No deduction (hook never wrote anything) |
-| Hook passes, body succeeds | Deduction applied in `execution_result` |
-| Hook passes, body REVERTs / Halts / OOGs | **Deduction skipped** — agent does not lose quota |
+| Hook passes, body succeeds | Full deduction (tokens + native value + gas) in `execution_result` |
+| Hook passes, body REVERTs / Halts / OOGs | Token/value deduction skipped (strong-R1); **gas still charged** when `fee_payer == root` |
 
 **Hook-checkpoint rollback** (verified by `tests/hook_e2e.rs::batch_partial_failure_...`):
 even with deferred deduction the hook still wraps its transient writes
@@ -654,8 +666,9 @@ match Tempo's effective semantics without TIP-20.
 | `ERC20::approve(spender, amount)` | Deduct `amount` from quota for `token = call.target` |
 | `ISCI20::transferWithMemo(to, amount, memo)` | Deduct `amount` (same shape as transfer) |
 | `ISCI20::transferWithMeta(...)` (when added) | Deduct `amount` field |
-| `ERC20::transferFrom(from, to, amount)` | **Not counted** — spender ≠ session key |
-| Any other selector | No deduction (scope check is independent) |
+| `ERC20::transferFrom(from, to, amount)`, `from == root` | Deduct `amount` — the batch runs with `msg.sender == root`, so root IS the spender (review finding M-2) |
+| `ERC20::transferFrom(from, to, amount)`, `from != root` | Not counted — a third party's allowance is the funds source |
+| Any other selector | No deduction (scope check is independent). Limits alone cannot bound arbitrary token-moving selectors — pair `enforce_limits` with a selector-restricting scope for full coverage |
 
 **Integration point in revm**: the hook runs **after**
 `validate_against_state_and_deduct_caller` (so gas pre-payment, nonce bump etc.
