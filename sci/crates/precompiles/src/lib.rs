@@ -143,6 +143,31 @@ impl SciAgentState {
     }
 }
 
+/// Returns `true` iff `address` hosts an SCI precompile ([`ACCOUNT_KEYCHAIN_ADDRESS`]
+/// or [`SCI_AGENT_STATE_ADDRESS`]).
+///
+/// Every precompile provider in the system — the EL's [`PrecompilesMap`] lookup
+/// installed by [`install`] AND the proof client's zkVM provider — must agree on this
+/// set, or the sequencer and the verifier diverge on whether a call to these addresses
+/// executes a precompile or the `0xef` genesis placeholder code.
+#[inline]
+pub fn is_sci_precompile_address(address: &Address) -> bool {
+    *address == ACCOUNT_KEYCHAIN_ADDRESS || *address == SCI_AGENT_STATE_ADDRESS
+}
+
+/// Resolves an SCI precompile for `address`, if any — the single source of truth used
+/// by both the EL host integration ([`install`]) and the proof client's zkVM
+/// precompile provider, so the two execute identical code at these addresses.
+pub fn lookup_precompile(address: &Address, gas_params: &GasParams) -> Option<DynPrecompile> {
+    if *address == ACCOUNT_KEYCHAIN_ADDRESS {
+        Some(AccountKeychain::create_precompile(SCI_LAUNCH_HARDFORK, gas_params.clone()))
+    } else if *address == SCI_AGENT_STATE_ADDRESS {
+        Some(SciAgentState::create_precompile(SCI_LAUNCH_HARDFORK, gas_params.clone()))
+    } else {
+        None
+    }
+}
+
 /// The Tempo-hardfork level SCI launches its precompiles at — the single switch that
 /// turns hardfork-gated keychain features on/off chain-wide.
 ///
@@ -167,19 +192,7 @@ pub const SCI_LAUNCH_HARDFORK: TempoHardfork = TempoHardfork::T5;
 pub fn install<Spec: Copy + 'static>(precompiles: &mut PrecompilesMap, cfg: &CfgEnv<Spec>) {
     let gas_params = cfg.gas_params.clone();
     precompiles.set_precompile_lookup(move |address: &Address| -> Option<DynPrecompile> {
-        if *address == ACCOUNT_KEYCHAIN_ADDRESS {
-            Some(AccountKeychain::create_precompile(
-                SCI_LAUNCH_HARDFORK,
-                gas_params.clone(),
-            ))
-        } else if *address == SCI_AGENT_STATE_ADDRESS {
-            Some(SciAgentState::create_precompile(
-                SCI_LAUNCH_HARDFORK,
-                gas_params.clone(),
-            ))
-        } else {
-            None
-        }
+        lookup_precompile(address, &gas_params)
     });
 }
 

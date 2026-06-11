@@ -157,6 +157,15 @@ sci-chain/
    - `crates/execution/node/src/node.rs` — register AA tx type 0x76 via
      `EthTransactionValidatorBuilder::with_custom_tx_type` so reth's inner validator does
      not reject it as `TxTypeNotSupported`.
+   - `crates/proof/succinct/utils/client/src/precompiles/mod.rs` (+ `Cargo.toml` adds
+     `sci-precompiles.workspace = true`) — zkVM precompile parity ("Caveat B",
+     2026-06-11): `BaseZkvmPrecompiles::run` resolves the SCI precompile addresses via
+     `sci_precompiles::lookup_precompile` (same source of truth as the EL's `install()`
+     lookup) before the static Eth set, mirroring `PrecompilesMap::run` semantics
+     exactly (reverted outputs carry bytes; lookup addresses stay cold — NOT in
+     `warm_addresses`); `contains` reports them. Without this, any direct call to
+     `0xAAAA..00/01` (authorizeKey/revokeKey, CircuitBreaker.trip → tripKey) executes
+     the `0xef` placeholder in the zkVM and the verifier forks from the sequencer.
 3. **Tempo code is reference only**. Source is at `/home/gavin/opensci/sci-dev/tempo/`
    (an earlier draft of this guide listed `~/sci-dev/Tempo-ref/` — that path does not exist
    on this machine). Copy and adapt, never import as a git dependency.

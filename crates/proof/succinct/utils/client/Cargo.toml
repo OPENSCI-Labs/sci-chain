@@ -22,6 +22,9 @@ base-common-evm.workspace = true
 revm.workspace = true
 revm-precompile.workspace = true
 
+# sci (zkVM-side AccountKeychain/SciAgentState precompiles — EL parity, "Caveat B")
+sci-precompiles.workspace = true
+
 # base-consensus / base-proof
 alloy-genesis = { workspace = true }
 base-proof-preimage = { workspace = true, features = ["rkyv", "serde"] }

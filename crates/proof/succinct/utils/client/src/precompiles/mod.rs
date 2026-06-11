@@ -2,6 +2,7 @@
 
 use alloc::string::String;
 
+use alloy_evm::precompiles::Precompile as _;
 use alloy_primitives::{Address, Bytes};
 use base_common_evm::{BasePrecompiles, BaseSpecId};
 use revm::{
@@ -101,7 +102,12 @@ impl BaseZkvmPrecompiles {
 
 impl<CTX> PrecompileProvider<CTX> for BaseZkvmPrecompiles
 where
-    CTX: ContextTr<Cfg: Cfg<Spec = BaseSpecId>>,
+    CTX: ContextTr<
+        Cfg: Cfg<Spec = BaseSpecId>,
+        Db: alloy_evm::Database,
+        Journal: revm::context_interface::JournalTr<Database: alloy_evm::Database>
+                     + core::fmt::Debug,
+    >,
 {
     type Output = InterpreterResult;
 
@@ -127,6 +133,70 @@ where
         };
 
         use revm::context::LocalContextTr;
+
+        // SCI parity: the EL resolves the AccountKeychain / SciAgentState precompiles
+        // through the `PrecompilesMap` lookup installed by `sci_precompiles::install`;
+        // the zkVM provider must resolve the same addresses to the same implementations
+        // or verifier execution diverges from the sequencer on any direct call to them
+        // (a call would hit the `0xef` genesis placeholder code instead — audit finding
+        // "Caveat B"). This branch mirrors `PrecompilesMap::run` exactly: lookup-based
+        // addresses stay COLD (deliberately NOT added to `warm_addresses`, matching the
+        // EL's documented lookup semantics), and reverted outputs carry their bytes.
+        if sci_precompiles::is_sci_precompile_address(&inputs.bytecode_address) {
+            let gas_params = context.cfg().gas_params().clone();
+            let precompile =
+                sci_precompiles::lookup_precompile(&inputs.bytecode_address, &gas_params)
+                    .expect("is_sci_precompile_address implies a lookup hit");
+
+            let (block, tx, cfg, journaled_state, _, local) = context.all_mut();
+            let r;
+            let input_bytes = match &inputs.input {
+                CallInput::SharedBuffer(range) => {
+                    #[allow(clippy::option_if_let_else)]
+                    if let Some(slice) = local.shared_memory_buffer_slice(range.clone()) {
+                        r = slice;
+                        &*r
+                    } else {
+                        &[]
+                    }
+                }
+                CallInput::Bytes(bytes) => bytes.as_ref(),
+            };
+
+            let precompile_result = precompile.call(alloy_evm::precompiles::PrecompileInput {
+                data: input_bytes,
+                gas: inputs.gas_limit,
+                caller: inputs.caller,
+                value: inputs.call_value(),
+                is_static: inputs.is_static,
+                internals: alloy_evm::EvmInternals::new(journaled_state, block, cfg, tx),
+                target_address: inputs.target_address,
+                bytecode_address: inputs.bytecode_address,
+            });
+
+            match precompile_result {
+                Ok(output) => {
+                    let underflow = result.gas.record_cost(output.gas_used);
+                    assert!(underflow, "Gas underflow is not possible");
+                    result.result = if output.reverted {
+                        InstructionResult::Revert
+                    } else {
+                        InstructionResult::Return
+                    };
+                    result.output = output.bytes;
+                }
+                Err(PrecompileError::Fatal(e)) => return Err(e),
+                Err(e) => {
+                    result.result = if e.is_oog() {
+                        InstructionResult::PrecompileOOG
+                    } else {
+                        InstructionResult::PrecompileError
+                    };
+                }
+            }
+
+            return Ok(Some(result));
+        }
         // NOTE: this snippet is refactored from the revm source code.
         // See https://github.com/bluealloy/revm/blob/9bc0c04fda0891e0e8d2e2a6dfd0af81c2af18c4/crates/handler/src/precompile_provider.rs#L111-L122.
         let shared_buffer;
@@ -192,7 +262,9 @@ where
 
     #[inline]
     fn contains(&self, address: &Address) -> bool {
-        self.inner.contains(address)
+        // SCI parity: the EL's `PrecompilesMap::contains` consults the SCI lookup, so a
+        // call to these addresses is treated as a precompile call there — mirror that.
+        sci_precompiles::is_sci_precompile_address(address) || self.inner.contains(address)
     }
 }
 
@@ -497,6 +569,127 @@ mod tests {
         assert_eq!(
             cycle_tracker::keys::KZG_EVAL,
             format!("{}{}", cycle_tracker::PREFIX, cycle_tracker::names::KZG_EVAL)
+        );
+    }
+
+    // ===== SCI precompile parity (audit finding "Caveat B") =====
+
+    alloy_sol_types::sol! {
+        function getKey(address account, address keyId);
+        function isTripped(address sessionKey);
+    }
+
+    /// Builds direct-call inputs (`target == bytecode`, unlike the DELEGATECALL helper
+    /// above) — SCI precompiles reject non-direct calls.
+    fn direct_call_inputs(address: Address, input: Bytes, gas_limit: u64) -> CallInputs {
+        CallInputs {
+            input: CallInput::Bytes(input),
+            gas_limit,
+            bytecode_address: address,
+            target_address: address,
+            caller: Address::ZERO,
+            value: CallValue::Transfer(U256::ZERO),
+            scheme: CallScheme::Call,
+            is_static: false,
+            return_memory_offset: 0..0,
+            known_bytecode: None,
+        }
+    }
+
+    /// The zkVM provider must resolve the AccountKeychain precompile exactly like the
+    /// EL's `PrecompilesMap` lookup does — a direct `getKey` call executes the keychain
+    /// (returning a zeroed KeyInfo on empty state) instead of falling through to the
+    /// `0xef` placeholder account code.
+    #[test]
+    fn test_sci_keychain_call_resolves() {
+        use alloy_sol_types::SolCall;
+        let mut ctx = create_test_context();
+        let mut precompiles =
+            BaseZkvmPrecompiles::new_with_spec(BaseSpecId::new(BaseUpgrade::Bedrock));
+
+        let data = getKeyCall { account: Address::ZERO, keyId: Address::from([0x11; 20]) }
+            .abi_encode();
+        let inputs = direct_call_inputs(
+            sci_precompiles::ACCOUNT_KEYCHAIN_ADDRESS,
+            Bytes::from(data),
+            1_000_000,
+        );
+
+        let result = precompiles
+            .run(&mut ctx, &inputs)
+            .expect("no fatal error")
+            .expect("keychain address must resolve to a precompile");
+        assert_eq!(result.result, InstructionResult::Return, "getKey on empty state returns Ok");
+        assert!(!result.output.is_empty(), "getKey returns an ABI-encoded KeyInfo");
+    }
+
+    /// Same for the SciAgentState precompile (`isTripped` view).
+    #[test]
+    fn test_sci_agent_state_call_resolves() {
+        use alloy_sol_types::SolCall;
+        let mut ctx = create_test_context();
+        let mut precompiles =
+            BaseZkvmPrecompiles::new_with_spec(BaseSpecId::new(BaseUpgrade::Bedrock));
+
+        let data = isTrippedCall { sessionKey: Address::from([0x22; 20]) }.abi_encode();
+        let inputs = direct_call_inputs(
+            sci_precompiles::SCI_AGENT_STATE_ADDRESS,
+            Bytes::from(data),
+            1_000_000,
+        );
+
+        let result = precompiles
+            .run(&mut ctx, &inputs)
+            .expect("no fatal error")
+            .expect("agent-state address must resolve to a precompile");
+        assert_eq!(result.result, InstructionResult::Return);
+        assert_eq!(result.output.len(), 32, "isTripped returns one ABI word");
+    }
+
+    /// Parity details with the EL's `PrecompilesMap`: `contains` reports the SCI
+    /// addresses, but `warm_addresses` does NOT include them (lookup-resolved
+    /// precompiles are documented as always-cold on the EL side — warming them only
+    /// in the zkVM would shift gas and fork the state root).
+    #[test]
+    fn test_sci_addresses_contained_but_cold() {
+        let precompiles = BaseZkvmPrecompiles::new_with_spec(BaseSpecId::new(BaseUpgrade::Bedrock));
+
+        let kc = sci_precompiles::ACCOUNT_KEYCHAIN_ADDRESS;
+        let st = sci_precompiles::SCI_AGENT_STATE_ADDRESS;
+        assert!(PrecompileProvider::<TestContext>::contains(&precompiles, &kc));
+        assert!(PrecompileProvider::<TestContext>::contains(&precompiles, &st));
+
+        let warm: Vec<Address> =
+            PrecompileProvider::<TestContext>::warm_addresses(&precompiles).collect();
+        assert!(!warm.contains(&kc), "lookup-resolved SCI precompiles must stay cold");
+        assert!(!warm.contains(&st), "lookup-resolved SCI precompiles must stay cold");
+    }
+
+    /// A DELEGATECALL to the keychain reverts with `DelegateCallNotAllowed` — same as
+    /// on the EL (the `sci_precompile!` boundary rejects non-direct calls).
+    #[test]
+    fn test_sci_keychain_delegatecall_reverts() {
+        use alloy_sol_types::SolCall;
+        let mut ctx = create_test_context();
+        let mut precompiles =
+            BaseZkvmPrecompiles::new_with_spec(BaseSpecId::new(BaseUpgrade::Bedrock));
+
+        let data = getKeyCall { account: Address::ZERO, keyId: Address::ZERO }.abi_encode();
+        // create_call_inputs sets target_address = ZERO != bytecode_address (DELEGATECALL).
+        let inputs = create_call_inputs(
+            sci_precompiles::ACCOUNT_KEYCHAIN_ADDRESS,
+            Bytes::from(data),
+            1_000_000,
+        );
+
+        let result = precompiles
+            .run(&mut ctx, &inputs)
+            .expect("no fatal error")
+            .expect("keychain address must resolve to a precompile");
+        assert_eq!(
+            result.result,
+            InstructionResult::Revert,
+            "delegatecall to an SCI precompile must revert, not execute"
         );
     }
 }
