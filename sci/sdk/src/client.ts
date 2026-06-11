@@ -203,33 +203,36 @@ export class SciAaClient {
     });
   }
 
-  /** Reads the registry binding for `keyId` (agentId / account / registeredAt / revoked). */
-  async getBinding(keyId: Hex) {
+  /**
+   * Reads the registry binding for `(account, keyId)` (agentId / account / registeredAt /
+   * revoked). Bindings are scoped per root account — see IAgentAccessKeyRegistry.
+   */
+  async getBinding(account: Hex, keyId: Hex) {
     return this.client.readContract({
       address: AGENT_ACCESS_KEY_REGISTRY_ADDRESS,
       abi: agentAccessKeyRegistryAbi,
       functionName: "getBinding",
-      args: [keyId],
+      args: [account, keyId],
     });
   }
 
-  /** Returns whether `keyId` is currently bound to an agent in the registry. */
-  async isBound(keyId: Hex): Promise<boolean> {
+  /** Returns whether `keyId` is currently bound to an agent under `account`. */
+  async isBound(account: Hex, keyId: Hex): Promise<boolean> {
     return this.client.readContract({
       address: AGENT_ACCESS_KEY_REGISTRY_ADDRESS,
       abi: agentAccessKeyRegistryAbi,
       functionName: "isBound",
-      args: [keyId],
+      args: [account, keyId],
     });
   }
 
-  /** Reads the off-chain `agentId` bound to `keyId` (zero if unbound). */
-  async agentIdOf(keyId: Hex): Promise<Hex> {
+  /** Reads the off-chain `agentId` bound to `keyId` under `account` (zero if unbound). */
+  async agentIdOf(account: Hex, keyId: Hex): Promise<Hex> {
     return this.client.readContract({
       address: AGENT_ACCESS_KEY_REGISTRY_ADDRESS,
       abi: agentAccessKeyRegistryAbi,
       functionName: "agentIdOf",
-      args: [keyId],
+      args: [account, keyId],
     });
   }
 

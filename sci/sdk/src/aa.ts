@@ -76,17 +76,32 @@ export interface SignedAaTransaction {
 type RlpTree = Hex | RlpTree[];
 
 /** RLP minimal big-endian encoding of a non-negative integer (`0` → `"0x"` → `0x80`). */
-function minimalBytes(value: bigint): Hex {
-  if (value < 0n) throw new Error(`cannot RLP-encode a negative integer: ${value}`);
-  if (value === 0n) return "0x";
-  let hex = value.toString(16);
+function minimalBytes(value: bigint | number): Hex {
+  // Coerce up front so a JS-number `0` (falsy, but !== 0n) doesn't slip past the
+  // zero check and emit non-minimal RLP.
+  const v = BigInt(value);
+  if (v < 0n) throw new Error(`cannot RLP-encode a negative integer: ${v}`);
+  if (v === 0n) return "0x";
+  let hex = v.toString(16);
   if (hex.length % 2 === 1) hex = `0${hex}`;
   return `0x${hex}`;
 }
 
-/** An address field, or the empty string (`0x80`) when absent (`feePayer`/`root`/CREATE). */
+const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
+
+/**
+ * An address field, or the empty string (`0x80`) when absent (`feePayer`/`root`/CREATE).
+ *
+ * Absence must be expressed as strictly `null`/`undefined`. Any other value must be a
+ * well-formed 20-byte address — silently coercing a malformed value (e.g. `""`) to the
+ * empty field would change the tx's meaning: an empty `root` executes as the signer
+ * (bypassing root delegation) and an empty `to` becomes CREATE with the calldata as
+ * initcode.
+ */
 function addressOrEmpty(addr: Hex | null | undefined): Hex {
-  return addr ? (addr.toLowerCase() as Hex) : "0x";
+  if (addr === null || addr === undefined) return "0x";
+  if (!ADDRESS_RE.test(addr)) throw new Error(`invalid address field: ${JSON.stringify(addr)}`);
+  return addr.toLowerCase() as Hex;
 }
 
 /** A byte string, normalized so `undefined`/`null` become the empty string. */

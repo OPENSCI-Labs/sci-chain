@@ -324,7 +324,10 @@ export const agentAccessKeyRegistryAbi = [
     type: "function",
     name: "getBinding",
     stateMutability: "view",
-    inputs: [{ name: "keyId", type: "address" }],
+    inputs: [
+      { name: "account", type: "address" },
+      { name: "keyId", type: "address" },
+    ],
     outputs: [
       {
         name: "",
@@ -342,14 +345,20 @@ export const agentAccessKeyRegistryAbi = [
     type: "function",
     name: "isBound",
     stateMutability: "view",
-    inputs: [{ name: "keyId", type: "address" }],
+    inputs: [
+      { name: "account", type: "address" },
+      { name: "keyId", type: "address" },
+    ],
     outputs: [{ name: "", type: "bool" }],
   },
   {
     type: "function",
     name: "agentIdOf",
     stateMutability: "view",
-    inputs: [{ name: "keyId", type: "address" }],
+    inputs: [
+      { name: "account", type: "address" },
+      { name: "keyId", type: "address" },
+    ],
     outputs: [{ name: "", type: "bytes32" }],
   },
   {
