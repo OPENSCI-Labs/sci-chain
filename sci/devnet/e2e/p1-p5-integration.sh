@@ -24,7 +24,7 @@ export PATH=$PATH:~/.foundry/bin
 
 # ----------------------------- config -----------------------------
 RPC=${L2_RPC:-http://localhost:7545}
-SCI_REPO=${SCI_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}
+SCI_REPO=${SCI_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)}
 TXGEN=${AA_TXGEN:-$SCI_REPO/target/release/sci-aa-txgen}
 CHAIN=${CHAIN_ID:-42001}
 
