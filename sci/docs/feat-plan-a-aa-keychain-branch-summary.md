@@ -130,21 +130,65 @@ which Plan A never creates):
   (`sci_agent_delegator.rs`), and the Plan B deduction path removed; `SciHandler`'s non-agent
   branch now falls straight through to normal execution.
 - Tests: the 14 Plan B `hook_e2e.rs` integration tests + the delegator/registrar unit tests
-  deleted. (Plan A hook coverage is the `sci/devnet/e2e/` live loop.)
+  deleted. (Since restored AA-natively — see §7.)
 - Docs: CLAUDE.md, audit-scope, registration-decision, and the AA e2e runbook updated.
 
-## 7. Verification
+## 7. Code-review hardening round (2026-06-10 review → 2026-06-11 fixes)
 
-- `cargo check`: `sci-precompile-abi`, `sci-precompiles`, `base-common-evm`, and the full `base`
-  binary — all pass.
-- `cargo test -p sci-precompiles`: 315 passed, 0 failed, 1 ignored.
-- `forge build` + `forge test`: 16 unit tests pass; 7 integration suites skip without a fork.
+A full-branch review (working notes: `docs/test/plan-a-code-review-2026-06-10.md`, gitignored,
+with a per-finding resolution table at the bottom) found **no consensus or fund-safety
+criticals** but six Medium findings; all six plus most Low findings were fixed in
+`37d01c989..6e5e284b1`:
+
+- **M-1** — the D-gas `address(0)` sentinel is charged even when a sponsored
+  (`fee_payer == root`) batch **reverts**; token/native-value deductions stay success-only
+  (strong-R1). Previously a deliberately-reverting batch burned root's ETH for gas without
+  ever touching the quota.
+- **M-2** — `ERC20.transferFrom(from == root, …)` is metered against the per-token quota
+  (the batch runs with `msg.sender == root`, so root IS the spender).
+- **M-3** — pool admission gate for sponsored AA txs (`check_aa_keychain_authorization`):
+  `fee_payer` must equal `root`, and `keys[root][signer]` must be a plausibly-active
+  keychain record (raw state-slot read; helpers in `account_keychain/sci_ext.rs`). Kills
+  zero-cost pool stuffing via fresh unfunded signers. **Behavior change:** a sponsored
+  `0x76` tx is rejected at RPC admission until its `authorizeKey` is mined.
+- **M-4** — `sci-predeploy-allocs.json` re-exported (stale since `41d469a31`; a fresh
+  genesis shipped a BudgetController whose `gasBudget()`/`GAS_TOKEN()` reverted).
+- **M-5** — registry bindings keyed by `(account, keyId)` instead of a squattable global
+  `keyId`; view functions + SDK take an extra `account` param; `bindKey` rejects expired
+  keychain keys.
+- **M-6** — `tests/hook_e2e.rs` restored as **13 AA-native integration tests**
+  (authorization/CB/scope rejections, strong-R1, M-1/M-2 regressions, batch atomicity);
+  the previously vacuous fork invariant suite now drives a real guardian handler with a
+  ghost model. The restored suite immediately caught (and the round fixed) a live bug:
+  `execute_aa_batch` never journal-loaded `root`, so a value-bearing call with `root` set
+  and no `fee_payer` panicked inside revm's `transfer_internal`.
+- Low sweep: empty-batch admission reject (L-2), `InMemorySize` undercount (L-3), hook
+  system-error propagation + `KeyTripped` business error instead of `Fatal` (L-5/L-6),
+  missing-sentinel-row rejection documented as intentional (L-7), `SCI_LAUNCH_HARDFORK`
+  constant unifying hook/install at T5 (L-8), SDK address-field validation + RLP zero
+  coercion (L-10), `renounceOwnership` disabled on the circuit breaker (L-12 part).
+
+Still tracked: L-1 (`pooled.rs` alloy-lowering `unreachable!` arms), L-11 (SDK golden
+vectors for access-list/CREATE need `aa-txgen` flags), the L-12 remainder
+(`checkAndAlert` level-trigger, mock permissiveness), and a devnet genesis rebake
+(`deploy-fresh.sh`) to pick up the new predeploy bytecode.
+
+## 8. Verification
+
+- `cargo check`: `sci-precompile-abi`, `sci-precompiles`, `base-common-evm`,
+  `base-common-consensus`, `base-execution-txpool`, and the full `base` binary — all pass.
+- `cargo test -p sci-precompiles --lib`: 318 passed, 0 failed, 1 ignored.
+- `cargo test -p sci-precompiles --test hook_e2e`: 13 passed (AA-native suite).
+- `cargo test -p base-execution-txpool --lib`: 46 passed (incl. the AA admission gate).
+- `forge build` + `forge test`: 19 unit tests pass; 7 integration suites skip without a fork.
+- SDK (`sci/sdk`): 27 tests pass; golden byte-parity with `sci-aa-txgen` unchanged.
 - All Plan A Phase 1–6 flows devnet-verified (per the phase tracker in
   `docs/test/plan-a-status.md`, gitignored).
 - Integration test `sci/devnet/e2e/p1-p5-integration.sh` (27 assertions incl. edge cases)
-  passes against a live devnet sequencer.
+  passes against a live devnet sequencer. (Re-run pending after the M-3 admission gate —
+  sponsored sends must wait for `authorizeKey` inclusion.)
 
-## 8. TBD — agent-facing tooling (send AA txs without `sci-aa-txgen`)
+## 9. TBD — agent-facing tooling (send AA txs without `sci-aa-txgen`)
 
 Today an agent can only build a `0x76` AA tx via the dev CLI `sci-aa-txgen`. Standard
 wallets / ethers / viem don't recognize the custom tx type, and SCI's `0x76` is
@@ -169,7 +213,7 @@ To give SCI agents the same "just send" experience, three layers remain to be bu
 Reference stack to mirror (clone + archaeology notes under `~/opensci/tempo-test-net/`):
 `agent → tempo-mcp → tempo-accounts-sdk → viem → 0x76`.
 
-## 9. One-sentence summary
+## 10. One-sentence summary
 
 `feat/plan-a-aa-keychain` adds a native AA transaction type (`0x76`) with a pre-execution
 keychain hook on top of the Tempo-ported `AccountKeychain` precompile, delivering the Agent
