@@ -143,6 +143,19 @@ impl SciAgentState {
     }
 }
 
+/// The Tempo-hardfork level SCI launches its precompiles at — the single switch that
+/// turns hardfork-gated keychain features on/off chain-wide.
+///
+/// T5 (from Tempo v1.7.1) makes the TIP-1053 key authorization witness API
+/// (`authorizeKey(_, _, _, witness)`, `burnKeyAuthorizationWitness`,
+/// `isKeyAuthorizationWitnessBurned`) reachable; the selector schedule in
+/// `account_keychain/dispatch.rs` still gates the T5 selectors behind `is_t5()`.
+/// Both the [`install`] lookup and the pre-execution hook's storage provider
+/// (`handler/hook.rs::enter_keychain_storage`) must consult the same value, or the
+/// hook would read keychain state under different packing/gating rules than the
+/// precompile writes it with.
+pub const SCI_LAUNCH_HARDFORK: TempoHardfork = TempoHardfork::T5;
+
 /// Installs SCI Chain's precompile lookup on top of an existing [`PrecompilesMap`].
 ///
 /// Call this after constructing the base map from `EthPrecompiles` to add SCI precompiles.
@@ -155,19 +168,13 @@ pub fn install<Spec: Copy + 'static>(precompiles: &mut PrecompilesMap, cfg: &Cfg
     let gas_params = cfg.gas_params.clone();
     precompiles.set_precompile_lookup(move |address: &Address| -> Option<DynPrecompile> {
         if *address == ACCOUNT_KEYCHAIN_ADDRESS {
-            // SCI launches at T5 from v1.7.1 onwards so the TIP-1053 key
-            // authorization witness API (`authorizeKey(_, _, _, witness)`,
-            // `burnKeyAuthorizationWitness`, `isKeyAuthorizationWitnessBurned`)
-            // is reachable. The selector schedule in `account_keychain/dispatch.rs`
-            // still gates the T5 selectors behind `is_t5()`, so this is the
-            // single switch that turns the feature on/off chain-wide.
             Some(AccountKeychain::create_precompile(
-                TempoHardfork::T5,
+                SCI_LAUNCH_HARDFORK,
                 gas_params.clone(),
             ))
         } else if *address == SCI_AGENT_STATE_ADDRESS {
             Some(SciAgentState::create_precompile(
-                TempoHardfork::T5,
+                SCI_LAUNCH_HARDFORK,
                 gas_params.clone(),
             ))
         } else {

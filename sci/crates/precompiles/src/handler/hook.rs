@@ -109,6 +109,12 @@ where
 /// so a rejection leaks no state. Spending-limit metering (pre-flight + deferred deduction,
 /// including native value and gas via the `address(0)` sentinel) is layered on separately
 /// (2c-ii).
+///
+/// Note (review finding L-7, intentional): an `enforce_limits` key whose root sponsors gas
+/// (`fee_payer == root`) or whose batch moves native value MUST have an `address(0)`
+/// sentinel limit row — without one `effective_remaining_limit` is zero and the whole tx
+/// is rejected. Treating a missing row as "unlimited" would let gas/value spend bypass the
+/// quota system entirely, so configure a sentinel limit when authorizing such keys.
 pub fn run_aa_keychain_hook<EVM, ERROR>(
     evm: &mut EVM,
     root: Address,
@@ -155,9 +161,12 @@ where
     let hook_result = enter_keychain_storage(evm.ctx(), || -> crate::error::Result<()> {
         let cb = SciAgentState::default();
         if cb.is_tripped(isTrippedCall { sessionKey: session_key })? {
-            return Err(crate::error::TempoPrecompileError::Fatal(format!(
-                "agent session key {session_key:?} is tripped",
-            )));
+            // Business error (not Fatal): a tripped key is a per-tx rejection, and the
+            // system-error branch below must not escalate it to a block-build failure.
+            return Err(tempo_contracts::precompiles::SciAgentStateError::key_tripped(
+                session_key,
+            )
+            .into());
         }
 
         let mut kc = AccountKeychain::default();
@@ -175,7 +184,7 @@ where
                 *e = e.saturating_add(call.value);
             }
             if let TxKind::Call(target) = call.to {
-                if let Some((token, amount)) = classify_token_call(target, &call.input) {
+                if let Some((token, amount)) = classify_token_call(root, target, &call.input) {
                     let e = totals_per_token.entry(token).or_insert(U256::ZERO);
                     *e = e.saturating_add(amount);
                 }
@@ -210,6 +219,13 @@ where
         Ok(()) => {
             evm.ctx().journal_mut().checkpoint_commit();
             Ok(HookOutcome::Pass)
+        }
+        // System faults (DB failure, OOG, panic) are NOT per-tx rejections: silently
+        // skipping the tx would mask a node-level problem (and a deterministic fault
+        // would diverge sequencer/verifier). Propagate as a hard error.
+        Err(e) if e.is_system_error() => {
+            evm.ctx().journal_mut().checkpoint_revert(checkpoint);
+            Err(ERROR::from_string(format!("SCI AA keychain hook system error: {e:?}")))
         }
         Err(e) => {
             evm.ctx().journal_mut().checkpoint_revert(checkpoint);
@@ -255,10 +271,11 @@ where
             kc.verify_and_update_spending(root, session_key, Address::ZERO, sentinel_total)?;
         }
 
-        // Recognized ERC-20 transfers/approves (D3-B, incl. transferWithMemo) → per-token.
+        // Recognized ERC-20 transfers/approves (D3-B, incl. transferWithMemo and
+        // transferFrom(from == root)) → per-token.
         for call in calls {
             if let TxKind::Call(target) = call.to {
-                if let Some((token, amount)) = classify_token_call(target, &call.input) {
+                if let Some((token, amount)) = classify_token_call(root, target, &call.input) {
                     kc.verify_and_update_spending(root, session_key, token, amount)?;
                 }
             }
@@ -275,8 +292,9 @@ where
 ///
 /// We can't reuse [`StorageCtx::enter_ctx`] directly because it requires
 /// `Cfg = CfgEnv<TempoHardfork>` while Base contexts use `Cfg = CfgEnv<OpSpecId>`. The
-/// SCI hardfork ladder is orthogonal to Base's spec ladder; SCI launches at
-/// `TempoHardfork::T3` so we hardcode that.
+/// SCI hardfork ladder is orthogonal to Base's spec ladder; the level comes from
+/// [`crate::SCI_LAUNCH_HARDFORK`] — the same value `install()` wires into the
+/// precompiles, so the hook reads keychain state under identical packing/gating rules.
 fn enter_keychain_storage<CTX, R>(ctx: &mut CTX, f: impl FnOnce() -> R) -> R
 where
     CTX: ContextTr<Db: AlloyDatabase, Journal: JournalTr<Database: AlloyDatabase> + Debug>,
@@ -291,7 +309,7 @@ where
         internals,
         u64::MAX,
         0,
-        TempoHardfork::T3,
+        crate::SCI_LAUNCH_HARDFORK,
         false,
         false,
         gas_params,

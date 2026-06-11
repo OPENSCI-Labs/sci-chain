@@ -37,6 +37,11 @@ crate::sol! {
         /// Named distinctly from `AccountKeychainError::UnauthorizedCaller` so the two have
         /// non-colliding 4-byte selectors and can be decoded unambiguously by clients.
         error Unauthorized();
+
+        /// Returned (by the pre-execution hook) when an agent tx's session key has been
+        /// tripped by the circuit breaker. A business error — not a system fault — so the
+        /// block builder skips the tx instead of treating it as a payload-build failure.
+        error KeyTripped(address sessionKey);
     }
 }
 
@@ -44,6 +49,11 @@ impl SciAgentStateError {
     /// Helper constructing the `Unauthorized` variant.
     pub const fn unauthorized_caller() -> Self {
         Self::Unauthorized(ISciAgentState::Unauthorized {})
+    }
+
+    /// Helper constructing the `KeyTripped` variant.
+    pub const fn key_tripped(session_key: Address) -> Self {
+        Self::KeyTripped(ISciAgentState::KeyTripped { sessionKey: session_key })
     }
 }
 

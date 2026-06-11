@@ -114,6 +114,10 @@ where
         // `root` when set, otherwise as the signer itself.
         let signer = evm.ctx().tx().caller();
         let caller = aa.root.unwrap_or(signer);
+        // The deduct-caller step only loads the signer; when the batch executes as `root`
+        // the journal must hold root's account too before any value transfer touches it
+        // (revm's `transfer` assumes both ends are loaded — an unloaded `from` panics).
+        evm.ctx().journal_mut().load_account(caller)?;
 
         // One outer checkpoint makes the whole batch atomic.
         let checkpoint = evm.ctx().journal_mut().checkpoint();
@@ -441,22 +445,38 @@ where
         evm: &mut Self::Evm,
         frame_result: <<Self::Evm as EvmTr>::Frame as FrameTr>::FrameResult,
     ) -> Result<ExecutionResult<Self::HaltReason>, Self::Error> {
-        // Q4 strong-R1: apply the deferred spending-limit deductions only if the EVM
-        // body completed successfully. The pre-execution hook does a pre-flight check
-        // but doesn't write; this is where the real deduction lands, so a tx that the
-        // hook authorized but the body then reverts costs zero quota.
+        // Q4 strong-R1 (spend) + always-on gas metering. The pre-execution hook does a
+        // read-only pre-flight; this is where the real deductions land, split by outcome:
         //
-        // Only AA agent txs (root set) carry a deduction; deposit and non-agent txs have none.
-        if frame_result.interpreter_result().result.is_ok() {
-            // AA agent txs (root set) meter against the keychain via the AA-native path
-            // (native value + gas → address(0) sentinel; ERC-20 → per-token). Non-agent
-            // txs (non-AA, or AA without root) have no spending-limit deduction.
-            let root = evm.ctx().tx().aa_parts().and_then(|a| a.root);
-            if let Some(root_addr) = root {
-                let signer = evm.ctx().tx().caller();
-                let raw_fee_payer = evm.ctx().tx().aa_parts().and_then(|a| a.fee_payer);
-                let calls: Vec<AaCall> = evm
-                    .ctx()
+        // - Token / native-value deductions apply only when the EVM body completed
+        //   successfully — a hook-passing, body-reverting tx moved no funds, so it costs
+        //   zero spend quota (strong-R1).
+        // - The D-gas sentinel deduction applies REGARDLESS of body outcome: when
+        //   `fee_payer == root` sponsors gas, a reverting batch still burns root's real
+        //   ETH for gas, so the `address(0)` quota must track it. Otherwise a session key
+        //   could drain root via deliberately-reverting batches without ever touching the
+        //   limit (review finding M-1). The deduction (`gas_used * max_fee`) never exceeds
+        //   the pre-flight reservation (`gas_limit * max_fee`), so it cannot fail a limit
+        //   the hook already verified.
+        //
+        // Only AA agent txs (root set) carry deductions; deposit and non-agent txs have none.
+        let root = evm.ctx().tx().aa_parts().and_then(|a| a.root);
+        if let Some(root_addr) = root {
+            let body_ok = frame_result.interpreter_result().result.is_ok();
+            let signer = evm.ctx().tx().caller();
+            let raw_fee_payer = evm.ctx().tx().aa_parts().and_then(|a| a.fee_payer);
+            // D-gas: the gas the agent actually spent (gas_used * max_fee, pessimistic,
+            // matching the pre-flight reservation), counted only when root sponsored gas.
+            let gas_deduction = if raw_fee_payer == Some(root_addr) {
+                let gas_used = frame_result.gas().used();
+                let max_fee = evm.ctx().tx().max_fee_per_gas();
+                U256::from(gas_used).saturating_mul(U256::from(max_fee))
+            } else {
+                U256::ZERO
+            };
+            // On a failed body the batch's transfers were rolled back: meter gas only.
+            let calls: Vec<AaCall> = if body_ok {
+                evm.ctx()
                     .tx()
                     .aa_parts()
                     .map(|parts| {
@@ -466,16 +486,11 @@ where
                             .map(|c| AaCall { to: c.to, value: c.value, input: c.input.to_vec() })
                             .collect()
                     })
-                    .unwrap_or_default();
-                // D-gas: the gas the agent actually spent (gas_used * max_fee, pessimistic,
-                // matching the pre-flight reservation), counted only when root sponsored gas.
-                let gas_deduction = if raw_fee_payer == Some(root_addr) {
-                    let gas_used = frame_result.gas().used();
-                    let max_fee = evm.ctx().tx().max_fee_per_gas();
-                    U256::from(gas_used).saturating_mul(U256::from(max_fee))
-                } else {
-                    U256::ZERO
-                };
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            if body_ok || !gas_deduction.is_zero() {
                 apply_aa_post_execution_deductions::<EVM, ERROR>(
                     evm, root_addr, signer, &calls, gas_deduction,
                 )?;
