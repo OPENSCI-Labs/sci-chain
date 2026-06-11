@@ -428,8 +428,12 @@ impl BaseTxEnvelope {
             Self::Eip7702(tx) => &mut tx.tx_mut().input,
             Self::Deposit(tx) => &mut tx.inner_mut().input,
             // AA carries a batch of calls; expose the first call's input for the
-            // hash-mutation test helper. PoC assumes a non-empty batch.
-            Self::Aa(tx) => &mut tx.tx_mut().calls[0].input,
+            // hash-mutation test helper. Empty batches are rejected at pool admission
+            // (`ensure_aa_field_limits`), so reaching the expect means a caller
+            // constructed one in code.
+            Self::Aa(tx) => {
+                &mut tx.tx_mut().calls.first_mut().expect("AA batch must be non-empty").input
+            }
         }
     }
 

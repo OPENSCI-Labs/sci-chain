@@ -107,7 +107,8 @@ impl reth_primitives_traits::InMemorySize for BaseTxEnvelope {
             Self::Eip1559(tx) => tx.size(),
             Self::Eip7702(tx) => tx.size(),
             Self::Deposit(tx) => tx.size(),
-            Self::Aa(tx) => tx.tx().size() + core::mem::size_of::<Signature>(),
+            // Like the siblings: `Signed::size` = tx body + signature + cached hash.
+            Self::Aa(tx) => tx.size(),
         }
     }
 }
