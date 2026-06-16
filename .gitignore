@@ -21,3 +21,6 @@ sci/docs/analysis/
 
 # SCI manual / hands-on test walkthroughs — local verification only, never committed.
 sci/docs/test/
+
+# SCI upgrade / uplift working notes (Base version bumps, CGT, EIP-8130) — local only, never committed.
+sci/docs/upgrade/

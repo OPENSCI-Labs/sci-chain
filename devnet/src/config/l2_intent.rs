@@ -41,6 +41,12 @@ l2ContractsLocator = "embedded"
   chainFeesRecipient = "{deployer}"
   minBaseFee = 1000000000
   daFootprintGasScalar = 0
+  # SCI native gas token (OP-Stack CGT v2 / V2-Full).
+  [chains.customGasToken]
+    name = "SCI"
+    symbol = "SCI"
+    initialLiquidity = "0x33b2e3c9fd0803ce8000000"
+    liquidityControllerOwner = "{deployer}"
   [chains.roles]
     l1ProxyAdminOwner = "{deployer}"
     l2ProxyAdminOwner = "{deployer}"
