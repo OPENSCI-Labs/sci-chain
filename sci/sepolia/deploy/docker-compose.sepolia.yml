@@ -1,0 +1,578 @@
+x-rust-service-build: &rust-service-build
+  context: ../..
+  dockerfile: etc/docker/Dockerfile.rust-services
+  args:
+    PROFILE: "${CARGO_PROFILE:-dev}"
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "100m"
+    max-file: "5"
+
+services:
+  setup-l1:
+    image: devnet-setup:local
+    build:
+      context: ../..
+      dockerfile: etc/docker/Dockerfile.devnet
+    container_name: setup-l1
+    env_file: devnet-env
+    volumes:
+      - ../../.devnet/l1/configs:/output
+      - ../../.devnet/l1/reth:/data/l1-reth
+      - ../../.devnet/l1/lighthouse:/data/l1-lighthouse
+    environment:
+      - CHAIN_ID=${L1_CHAIN_ID}
+      - SLOT_DURATION=4
+      - OUTPUT_DIR=/output
+      - SHARED_DIR=/output
+      - L1_DATA_DIR=/data
+    entrypoint: ["/usr/local/bin/setup-l1.sh"]
+
+  l1-el:
+    image: ghcr.io/paradigmxyz/reth:v1.11.3
+    container_name: l1-el
+    depends_on:
+      setup-l1:
+        condition: service_completed_successfully
+    ports:
+      - "${L1_HTTP_PORT}:${L1_HTTP_PORT}"   # HTTP RPC
+      - "${L1_WS_PORT}:${L1_WS_PORT}"       # WebSocket
+      - "${L1_AUTH_PORT}:${L1_AUTH_PORT}"   # Auth RPC (Engine API)
+      - "${L1_P2P_PORT}:${L1_P2P_PORT}"     # P2P
+    volumes:
+      - ../../.devnet/l1/reth:/data
+      - ../../.devnet/l1/configs:/genesis:ro
+    entrypoint: /usr/local/bin/reth
+    command:
+      - node
+      - --chain=/genesis/el/genesis.json
+      - --datadir=/data
+      - --color=never
+      - --http
+      - --http.addr=0.0.0.0
+      - --http.port=${L1_HTTP_PORT}
+      - --http.api=admin,eth,web3,net,rpc,debug,txpool
+      - --http.corsdomain=*
+      - --ws
+      - --ws.addr=0.0.0.0
+      - --ws.port=${L1_WS_PORT}
+      - --ws.api=eth,web3,net,txpool,debug
+      - --ws.origins=*
+      - --authrpc.port=${L1_AUTH_PORT}
+      - --authrpc.addr=0.0.0.0
+      - --authrpc.jwtsecret=/genesis/jwt.hex
+      - --port=${L1_P2P_PORT}
+      - --disable-discovery
+      - -vvv
+    healthcheck:
+      test: ["CMD", "bash", "-c", "echo > /dev/tcp/localhost/${L1_HTTP_PORT}"]
+      interval: 250ms
+      timeout: 1s
+      retries: 240
+      start_period: 250ms
+    restart: unless-stopped
+
+  l1-cl:
+    image: sigp/lighthouse:v8.0.1
+    container_name: l1-cl
+    depends_on:
+      setup-l1:
+        condition: service_completed_successfully
+    ports:
+      - "${L1_CL_HTTP_PORT}:${L1_CL_HTTP_PORT}"     # Beacon API
+      - "${L1_CL_P2P_PORT}:${L1_CL_P2P_PORT}"       # P2P TCP
+      - "${L1_CL_P2P_PORT}:${L1_CL_P2P_PORT}/udp"   # P2P UDP
+    volumes:
+      - ../../.devnet/l1/lighthouse:/data
+      - ../../.devnet/l1/configs:/genesis:ro
+    command:
+      - lighthouse
+      - bn
+      - --testnet-dir=/genesis/cl
+      - --datadir=/data/beacon
+      - --enable-private-discovery
+      - --disable-peer-scoring
+      - --staking
+      - --enr-address=127.0.0.1
+      - --enr-udp-port=${L1_CL_P2P_PORT}
+      - --enr-tcp-port=${L1_CL_P2P_PORT}
+      - --port=${L1_CL_P2P_PORT}
+      - --http
+      - --http-address=0.0.0.0
+      - --http-port=${L1_CL_HTTP_PORT}
+      - --http-allow-origin=*
+      - --disable-packet-filter
+      - --target-peers=0
+      - --supernode
+      - --execution-endpoint=http://l1-el:${L1_AUTH_PORT}
+      - --execution-jwt=/genesis/jwt.hex
+      - --always-prepare-payload
+      - --prepare-payload-lookahead=8000
+      - --suggested-fee-recipient=${FEE_RECIPIENT}
+    healthcheck:
+      test: ["CMD", "bash", "-c", "echo > /dev/tcp/localhost/${L1_CL_HTTP_PORT}"]
+      interval: 250ms
+      timeout: 1s
+      retries: 240
+      start_period: 250ms
+    restart: unless-stopped
+
+  l1-vc:
+    image: sigp/lighthouse:v8.0.1
+    container_name: l1-vc
+    depends_on:
+      l1-cl:
+        condition: service_healthy
+    volumes:
+      - ../../.devnet/l1/configs:/genesis
+    command:
+      - lighthouse
+      - vc
+      - --testnet-dir=/genesis/cl
+      - --datadir=/genesis/cl/validator_data
+      - --beacon-nodes=https://ethereum-sepolia-beacon-api.publicnode.com
+      - --init-slashing-protection
+      - --suggested-fee-recipient=${FEE_RECIPIENT}
+    restart: unless-stopped
+
+  setup-l2:
+    image: devnet-setup:local
+    build:
+      context: ../..
+      dockerfile: etc/docker/Dockerfile.devnet
+    container_name: setup-l2
+    env_file: devnet-env
+    depends_on:
+      l1-el:
+        condition: service_healthy
+    volumes:
+      - ../../.devnet:/devnet
+      - ../../.devnet/l2/builder:/data/l2-builder
+      - ../../.devnet/l2/builder-cl:/data/l2-builder-cl
+      - ../../.devnet/l2/client:/data/l2-client
+      - ../../.devnet/l2/client-cl:/data/l2-client-cl
+    environment:
+      - L1_RPC_URL=http://host.docker.internal:18645
+      - L1_CHAIN_ID=${L1_CHAIN_ID}
+      - L2_CHAIN_ID=${L2_CHAIN_ID}
+      - L2_BASE_V1_BLOCK=${L2_BASE_V1_BLOCK-}
+      - OUTPUT_DIR=/devnet/l2/configs
+      - L2_DATA_DIR=/data
+      - DEPLOYER_ADDR=${DEPLOYER_ADDR}
+      - DEPLOYER_KEY=${DEPLOYER_KEY}
+      - SEQUENCER_ADDR=${SEQUENCER_ADDR}
+      - BATCHER_ADDR=${BATCHER_ADDR}
+      - PROPOSER_ADDR=${PROPOSER_ADDR}
+      - CHALLENGER_ADDR=${CHALLENGER_ADDR}
+      - BUILDER_P2P_KEY=${BUILDER_P2P_KEY}
+      - BUILDER_ENODE_ID=${BUILDER_ENODE_ID}
+    entrypoint: ["/usr/local/bin/setup-l2.sh"]
+
+  base-builder:
+    image: base-builder:local
+    build:
+      <<: *rust-service-build
+      target: builder
+    container_name: base-builder
+    depends_on:
+      setup-l2:
+        condition: service_completed_successfully
+    ports:
+      - "${L2_BUILDER_HTTP_PORT}:${L2_BUILDER_HTTP_PORT}"           # HTTP RPC
+      - "${L2_BUILDER_WS_PORT}:${L2_BUILDER_WS_PORT}"               # WebSocket
+      - "${L2_BUILDER_AUTH_PORT}:${L2_BUILDER_AUTH_PORT}"           # Auth RPC (Engine API)
+      - "${L2_BUILDER_P2P_PORT}:${L2_BUILDER_P2P_PORT}"             # P2P
+      - "${L2_BUILDER_FLASHBLOCKS_PORT}:${L2_BUILDER_FLASHBLOCKS_PORT}"  # Flashblocks
+      - "${L2_BUILDER_METRICS_PORT}:${L2_BUILDER_METRICS_PORT}"     # Metrics
+    volumes:
+      - ../../.devnet/l2/builder:/data
+      - ../../.devnet/l1/configs:/genesis:ro
+      - ../../.devnet/l2/configs:/genesis/l2:ro
+    environment:
+      - OTEL_SERVICE_NAME=base-builder
+    entrypoint: /app/base-builder
+    command:
+      - node
+      - --chain=/genesis/l2/genesis.json
+      - --datadir=/data
+      - --tracing-otlp=http://jaeger:4318
+      - --tracing-otlp.filter=debug,providers::state::overlay=off,trie=off
+      - --telemetry.sampling-ratio=1
+      - --http
+      - --http.addr=0.0.0.0
+      - --http.port=${L2_BUILDER_HTTP_PORT}
+      - --http.api=admin,eth,web3,net,rpc,debug,txpool,miner
+      - --http.corsdomain=*
+      - --ws
+      - --ws.addr=0.0.0.0
+      - --ws.port=${L2_BUILDER_WS_PORT}
+      - --ws.api=eth,web3,net,txpool,debug
+      - --ws.origins=*
+      - --authrpc.port=${L2_BUILDER_AUTH_PORT}
+      - --authrpc.addr=0.0.0.0
+      - --authrpc.jwtsecret=/genesis/jwt.hex
+      - --port=${L2_BUILDER_P2P_PORT}
+      - --discovery.port=${L2_BUILDER_P2P_PORT}
+      - --p2p-secret-key-hex=${BUILDER_P2P_KEY}
+      - --trusted-peers=enode://${SEQ1_ENODE_ID}@base-sequencer-1:${L2_SEQ1_P2P_PORT}
+      - --trusted-peers=enode://${SEQ2_ENODE_ID}@base-sequencer-2:${L2_SEQ2_P2P_PORT}
+      - --flashblocks.addr=0.0.0.0
+      - --flashblocks.port=${L2_BUILDER_FLASHBLOCKS_PORT}
+      - --flashblocks.block-time=200
+      - --rollup.chain-block-time=2000
+      - --metrics=0.0.0.0:${L2_BUILDER_METRICS_PORT}
+      - --txpool.nolocals
+      - --rpc.txfeecap=0
+      - --rpc.gascap=600000000
+      - --color=never
+      - -vvv
+    healthcheck:
+      test: ["CMD", "bash", "-c", "echo > /dev/tcp/localhost/${L2_BUILDER_HTTP_PORT}"]
+      interval: 250ms
+      timeout: 1s
+      retries: 240
+      start_period: 250ms
+    restart: unless-stopped
+
+  base-builder-cl:
+    image: base-consensus:local
+    build:
+      <<: *rust-service-build
+      target: consensus
+    container_name: base-builder-cl
+    logging: *default-logging
+    depends_on:
+      base-builder:
+        condition: service_healthy
+    ports:
+      - "${L2_BUILDER_CL_RPC_PORT}:${L2_BUILDER_CL_RPC_PORT}"       # RPC
+      - "${L2_BUILDER_CL_P2P_PORT}:${L2_BUILDER_CL_P2P_PORT}"       # P2P TCP
+      - "${L2_BUILDER_CL_P2P_PORT}:${L2_BUILDER_CL_P2P_PORT}/udp"   # P2P UDP
+      - "${L2_BUILDER_CL_METRICS_PORT}:${L2_BUILDER_CL_METRICS_PORT}"  # Metrics
+    volumes:
+      - ../../.devnet/l2/builder-cl:/data
+      - ../../.devnet/l1/configs:/genesis:ro
+      - ../../.devnet/l2/configs:/genesis/l2:ro
+    entrypoint: /app/base-consensus
+    command:
+      - node
+      - --chain
+      - ${L2_CHAIN_ID}
+      - --l1-eth-rpc
+      - http://host.docker.internal:18645
+      - --l1-beacon
+      - https://ethereum-sepolia-beacon-api.publicnode.com
+      - --l2-engine-rpc
+      - ws://base-builder:${L2_BUILDER_AUTH_PORT}
+      - --l2-engine-jwt-secret
+      - /genesis/jwt.hex
+      - --l2-config-file
+      - /genesis/l2/rollup.json
+      - --l1-slot-duration-override
+      - "12"
+      - --rpc.addr
+      - "0.0.0.0"
+      - --rpc.port
+      - "${L2_BUILDER_CL_RPC_PORT}"
+      - --p2p.listen.tcp
+      - "${L2_BUILDER_CL_P2P_PORT}"
+      - --p2p.listen.udp
+      - "${L2_BUILDER_CL_P2P_PORT}"
+      - --p2p.advertise.ip
+      - base-builder-cl
+      - --p2p.priv.path
+      - /genesis/l2/builder-p2p-key.txt
+      - --metrics.enabled
+      - --metrics.addr
+      - "0.0.0.0"
+      - --metrics.port
+      - "${L2_BUILDER_CL_METRICS_PORT}"
+      - --mode
+      - Sequencer
+      - --sequencer.l1-confs
+      - "0"
+      - --p2p.sequencer.key
+      - ${SEQUENCER_KEY}
+      - --p2p.scoring
+      - Off
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:${L2_BUILDER_CL_RPC_PORT}/healthz"]
+      interval: 250ms
+      timeout: 1s
+      retries: 240
+      start_period: 250ms
+    restart: unless-stopped
+
+  base-batcher:
+    image: base-batcher:local
+    build:
+      <<: *rust-service-build
+      target: batcher
+    container_name: base-batcher
+    depends_on:
+      base-builder-cl:
+        condition: service_healthy
+    ports:
+      - "${BATCHER_METRICS_PORT}:${BATCHER_METRICS_PORT}"   # Metrics
+    command:
+      - --l1-rpc-url
+      - http://host.docker.internal:18645
+      - --l2-rpc-url
+      - http://base-builder:${L2_BUILDER_HTTP_PORT}
+      - --rollup-rpc-url
+      - http://base-builder-cl:${L2_BUILDER_CL_RPC_PORT}
+      - --private-key
+      - ${BATCHER_KEY}
+      - --max-channel-duration
+      - "2"
+      - --poll-interval
+      - "1"
+      - --sub-safety-margin
+      - "0"
+      - --num-confirmations
+      - "1"
+      - --metrics.enabled
+      - --metrics.addr
+      - "0.0.0.0"
+      - --metrics.port
+      - "${BATCHER_METRICS_PORT}"
+    restart: unless-stopped
+
+  base-client:
+    image: base-reth-node:local
+    build:
+      <<: *rust-service-build
+      target: client
+    container_name: base-client
+    logging: *default-logging
+    depends_on:
+      setup-l2:
+        condition: service_completed_successfully
+    ports:
+      - "${L2_CLIENT_HTTP_PORT}:${L2_CLIENT_HTTP_PORT}"     # HTTP RPC
+      - "${L2_CLIENT_WS_PORT}:${L2_CLIENT_WS_PORT}"         # WebSocket
+      - "${L2_CLIENT_AUTH_PORT}:${L2_CLIENT_AUTH_PORT}"     # Auth RPC (Engine API)
+      - "${L2_CLIENT_P2P_PORT}:${L2_CLIENT_P2P_PORT}"       # P2P
+      - "${L2_CLIENT_METRICS_PORT}:${L2_CLIENT_METRICS_PORT}"  # Metrics
+    volumes:
+      - ../../.devnet/l2/client:/data
+      - ../../.devnet/l1/configs:/genesis:ro
+      - ../../.devnet/l2/configs:/genesis/l2:ro
+    environment:
+      - OTEL_SERVICE_NAME=base-client
+    entrypoint: /app/base-client
+    command:
+      - node
+      - --chain=/genesis/l2/genesis.json
+      - --datadir=/data
+      - --tracing-otlp=http://jaeger:4318
+      - --tracing-otlp.filter=debug,providers::state::overlay=off,trie=off
+      - --http
+      - --http.addr=0.0.0.0
+      - --http.port=${L2_CLIENT_HTTP_PORT}
+      # Devnet keeps `miner` on HTTP so local services can read and update
+      # the dynamic DA and gas-limit knobs end-to-end.
+      - --http.api=admin,eth,web3,net,rpc,debug,txpool,miner
+      - --http.corsdomain=*
+      - --ws
+      - --ws.addr=0.0.0.0
+      - --ws.port=${L2_CLIENT_WS_PORT}
+      - --ws.api=eth,web3,net,txpool,debug
+      - --ws.origins=*
+      - --authrpc.port=${L2_CLIENT_AUTH_PORT}
+      - --authrpc.addr=0.0.0.0
+      - --authrpc.jwtsecret=/genesis/jwt.hex
+      - --port=${L2_CLIENT_P2P_PORT}
+      - --discovery.port=${L2_CLIENT_P2P_PORT}
+      - --metrics=0.0.0.0:${L2_CLIENT_METRICS_PORT}
+      - --txpool.nolocals
+      - --rpc.txfeecap=0
+      - --rpc.gascap=600000000
+      - --rpc.eth-proof-window=1209600
+      - --flashblocks-url=ws://base-builder:${L2_BUILDER_FLASHBLOCKS_PORT}
+      - --trusted-peers=enode://${BUILDER_ENODE_ID}@base-builder:${L2_BUILDER_P2P_PORT}
+      - --rollup.sequencer=http://base-builder:${L2_BUILDER_HTTP_PORT}
+      - --enable-metering
+      - --metering.gas-limit=${METERING_GAS_LIMIT}
+      - --metering.execution-time-us=${METERING_EXECUTION_TIME_US}
+      - --metering.state-root-time-us=${METERING_STATE_ROOT_TIME_US}
+      - --metering.da-bytes=${METERING_DA_BYTES}
+      - --metering.target-flashblocks-per-block=${METERING_TARGET_FLASHBLOCKS_PER_BLOCK}
+      - --color=never
+      - -vvv
+    healthcheck:
+      test: ["CMD", "bash", "-c", "echo > /dev/tcp/localhost/${L2_CLIENT_HTTP_PORT}"]
+      interval: 250ms
+      timeout: 1s
+      retries: 240
+      start_period: 250ms
+    restart: unless-stopped
+
+  base-client-cl:
+    image: base-consensus:local
+    build:
+      <<: *rust-service-build
+      target: consensus
+    container_name: base-client-cl
+    depends_on:
+      base-client:
+        condition: service_healthy
+      base-builder-cl:
+        condition: service_healthy
+    ports:
+      - "${L2_CLIENT_CL_RPC_PORT}:${L2_CLIENT_CL_RPC_PORT}"     # RPC
+      - "${L2_CLIENT_CL_P2P_PORT}:${L2_CLIENT_CL_P2P_PORT}"     # P2P TCP
+      - "${L2_CLIENT_CL_P2P_PORT}:${L2_CLIENT_CL_P2P_PORT}/udp" # P2P UDP
+      - "${L2_CLIENT_CL_METRICS_PORT}:${L2_CLIENT_CL_METRICS_PORT}"  # Metrics
+    volumes:
+      - ../../.devnet/l2/client-cl:/data
+      - ../../.devnet/l1/configs:/genesis:ro
+      - ../../.devnet/l2/configs:/genesis/l2:ro
+    entrypoint: /app/base-consensus
+    command:
+      - node
+      - --chain
+      - ${L2_CHAIN_ID}
+      - --l1-eth-rpc
+      - http://host.docker.internal:18645
+      - --l1-beacon
+      - https://ethereum-sepolia-beacon-api.publicnode.com
+      - --l2-engine-rpc
+      - ws://base-client:${L2_CLIENT_AUTH_PORT}
+      - --l2-engine-jwt-secret
+      - /genesis/jwt.hex
+      - --l2-config-file
+      - /genesis/l2/rollup.json
+      - --l1-slot-duration-override
+      - "12"
+      - --rpc.addr
+      - "0.0.0.0"
+      - --rpc.port
+      - "${L2_CLIENT_CL_RPC_PORT}"
+      - --p2p.listen.tcp
+      - "${L2_CLIENT_CL_P2P_PORT}"
+      - --p2p.listen.udp
+      - "${L2_CLIENT_CL_P2P_PORT}"
+      - --p2p.advertise.ip
+      - base-client-cl
+      - --metrics.enabled
+      - --metrics.addr
+      - "0.0.0.0"
+      - --metrics.port
+      - "${L2_CLIENT_CL_METRICS_PORT}"
+      - --p2p.bootnodes
+      - enode://${BUILDER_ENODE_ID}@base-builder-cl:${L2_BUILDER_CL_P2P_PORT}
+      - --p2p.scoring
+      - Off
+      - --l1.verifier-confs
+      - "${BASE_NODE_VERIFIER_L1_CONFS}"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:${L2_CLIENT_CL_RPC_PORT}/healthz"]
+      interval: 250ms
+      timeout: 1s
+      retries: 240
+      start_period: 250ms
+    restart: unless-stopped
+
+  contender:
+    image: flashbots/contender:latest
+    container_name: contender
+    depends_on:
+      base-builder:
+        condition: service_healthy
+    volumes:
+      - ../../etc/scripts/devnet/load/:/load:ro
+      - ../../.devnet/contender:/root/.contender
+    command:
+      - campaign
+      - /load/campaign.toml
+      - -r
+      - http://base-builder:${L2_BUILDER_HTTP_PORT}
+      - -p
+      - ${ANVIL_ACCOUNT_9_KEY}
+      - --min-balance
+      - ${CONTENDER_MIN_BALANCE}
+      - --optimistic-nonces
+      - --ignore-receipts
+      - --forever
+      - ${CONTENDER_GEN_REPORT:+--gen-report}
+    restart: always
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.56
+    container_name: jaeger
+    ports:
+      - "3001:16686"  # Jaeger UI
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+      - SPAN_STORAGE_TYPE=badger
+      - BADGER_EPHEMERAL=false
+      - BADGER_DIRECTORY_VALUE=/badger/data
+      - BADGER_DIRECTORY_KEY=/badger/key
+      - BADGER_SPAN_STORE_TTL=24h
+    volumes:
+      - jaeger-badger:/badger
+    restart: unless-stopped
+
+  pyroscope:
+    image: grafana/pyroscope:1.18.1
+    container_name: pyroscope
+    profiles: ["profiling"]
+    ports:
+      - "4040:4040"
+    command:
+      - "server"
+    restart: unless-stopped
+
+  alloy:
+    image: grafana/alloy:v1.13.1
+    container_name: alloy
+    profiles: ["profiling"]
+    privileged: true
+    pid: host
+    volumes:
+      - ../scripts/devnet/alloy.config:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - /etc/alloy/config.alloy
+    depends_on:
+      - pyroscope
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ../scripts/devnet/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.enable-lifecycle
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:10.4.1
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+      - GF_AUTH_DISABLE_LOGIN_FORM=true
+      - GF_INSTALL_PLUGINS=grafana-pyroscope-app
+    volumes:
+      - ../scripts/devnet/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../scripts/devnet/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - prometheus
+      - jaeger
+    restart: unless-stopped
+
+volumes:
+  jaeger-badger:

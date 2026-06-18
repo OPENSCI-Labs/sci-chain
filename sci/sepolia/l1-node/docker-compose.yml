@@ -1,0 +1,64 @@
+# Sepolia L1 node: reth (EL, Storage V2 tiered, MINIMAL pruning) + Nimbus (CL, pruned).
+#
+# Migrated from geth on 2026-06-13. reth 2.x Storage V2 uses a tiered layout (hot data
+# separated from historical records) and is the default for a fresh datadir, so no flag
+# is needed to enable it.
+#
+# Prune profile: `--minimal` (chosen 2026-06-13). Minimal mode keeps only the most
+# recent ~10064 blocks of bodies/receipts and fully prunes tx-lookup, giving the
+# smallest possible footprint (tens of GB on Sepolia). TRADE-OFF: op-node L1 derivation
+# can only look back ~1.4 days of L1 history — deep re-derivation / reorg recovery of
+# older L2 ranges will lack data. Acceptable for a continuously-running L1 beacon whose
+# L2 only needs forward derivation from its deploy point. If deeper look-back is ever
+# needed, switch to `--full` (keeps all post-Merge bodies) and resync.
+#
+# Note: there is NO official Sepolia v2 snapshot (snapshots.reth.rs is mainnet-only),
+# so reth P2P snap-syncs from scratch (~1-2 days).
+#
+# Host networking — p2p ports need no NAT mapping; AWS security group is the public
+# exposure boundary (do NOT open 8645/8651/5152 to the internet; the L2 stack on this
+# box reaches them via the docker host gateway).
+services:
+  reth:
+    image: ghcr.io/paradigmxyz/reth:latest
+    container_name: sepolia-reth
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - /home/ubuntu/sepolia/reth-data:/data
+      - /home/ubuntu/sepolia/jwt:/jwt:ro
+    command:
+      - node
+      - --chain=sepolia
+      - --minimal
+      - --datadir=/data
+      - --port=30403
+      - --discovery.port=30403
+      - --http
+      - --http.addr=0.0.0.0
+      - --http.port=8645
+      - --http.api=eth,net,web3,txpool,debug
+      - --http.corsdomain=*
+      - --authrpc.addr=0.0.0.0
+      - --authrpc.port=8651
+      - --authrpc.jwtsecret=/jwt/jwt.hex
+
+  nimbus:
+    image: statusim/nimbus-eth2:multiarch-latest
+    container_name: sepolia-nimbus
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - /home/ubuntu/sepolia/nimbus-data:/data
+      - /home/ubuntu/sepolia/jwt:/jwt:ro
+    command:
+      - --network=sepolia
+      - --data-dir=/data
+      - --el=http://127.0.0.1:8651
+      - --jwt-secret=/jwt/jwt.hex
+      - --rest
+      - --rest-address=0.0.0.0
+      - --rest-port=5152
+      - --tcp-port=9100
+      - --udp-port=9101
+      - --history=prune
