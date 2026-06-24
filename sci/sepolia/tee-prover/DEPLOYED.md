@@ -39,17 +39,24 @@ path is unaffected; `respectedGameType` was NOT flipped.
 Full record: `11155111-sci-live.json` (this dir) +
 `base-contracts/broadcast/DeploySciLive.s.sol/11155111/run-latest.json`.
 
-## Next
+## Step 5 — enclave + host UP (2026-06-24, host 13.251.15.192)
 
-- **Step 6 — `addDevSigner`** (deferred until enclave is up): once the enclave signer
-  address is known (Step 5 `enclave_signerPublicKey`), the registry owner (deployer)
-  calls on the DevTEEProverRegistry `0x4a5d38A9…`:
-  ```
-  cast send 0x4a5d38A941719e2133d3b77456bac99bce5e2997 \
-    "addDevSigner(address,bytes32)" <ENCLAVE_SIGNER> \
-    0x10e7bc20a7249b37435cf4ac18e4d3aad5be8a04853f1d8dec4da3edbb43cf0d \
-    --rpc-url <host geth> --private-key "$DEPLOYER_KEY"
-  ```
+- Enclave RUNNING: `nitro-cli run-enclave --cpu-count 4 --memory 16384 --eif-path
+  ~/sci-prover.eif --enclave-cid 16` (prod mode, PCR0 `4db46a64…`).
+- nitro-host LISTENING `0.0.0.0:9555` (built locally, scp'd, `setsid nohup ... server`;
+  env L1=:8645 L2=:8545 beacon=:5152 chain=42001 VSOCK_CID=16 registry=0x4a5d38A9…).
+- vsock verified: `enclave_signerPublicKey` → 65B pubkey.
+- **Enclave signer = `0x1585c1d8cdcc95a0ebb14256b9a6299ba9192e4e`** (ephemeral — regenerated
+  on every enclave restart from NSM RNG; re-register after any restart).
+
+## Step 6 — signer registered (2026-06-24, dev bypass)
+
+`addDevSigner(0x1585c1d8…, 0x10e7bc20…)` by deployer (registry owner) →
+tx `0x3d50b0d9f3649f5dfca05228731636e2420de1174f57ec710e1bcc3ab0766736`, status 1.
+Verified: `isRegisteredSigner=true`, `signerImageHash=0x10e7bc20…`, host `/healthz` → HTTP 200.
+Did NOT use the RISC0/Boundless `prover-registrar` path (dev bypass).
+
+## Next
 - **Step 7 — proposer** flags: `--anchor-state-registry-addr 0x38eE07…`,
   `--dispute-game-factory-addr 0x69A8E8…`, `--game-type 621`,
   `--tee-prover-registry-address 0x4a5d38A9…`,
