@@ -1,0 +1,13 @@
+diff --git a/scripts/multiproof/DeployDevBase.s.sol b/scripts/multiproof/DeployDevBase.s.sol
+index 31d00927..e0eeb029 100644
+--- a/scripts/multiproof/DeployDevBase.s.sol
++++ b/scripts/multiproof/DeployDevBase.s.sol
+@@ -58,7 +58,7 @@ abstract contract DeployDevBase is Script {
+         _writeOutput();
+     }
+ 
+-    function _deployInfrastructure(GameType gameType) internal {
++    function _deployInfrastructure(GameType gameType) internal virtual {
+         address owner = cfg.finalSystemOwner();
+         address factoryImpl = address(new DisputeGameFactory());
+         MinimalProxyAdmin proxyAdmin = new MinimalProxyAdmin(owner);
