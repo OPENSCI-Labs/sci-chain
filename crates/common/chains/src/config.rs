@@ -147,6 +147,8 @@ impl ChainConfig {
     pub const ZERONET_NAME: &'static str = "base-zeronet";
     /// CLI chain name for the local Base devnet.
     pub const DEVNET_NAME: &'static str = "dev";
+    /// CLI chain name for SCI Chain (chainId 42001, L1 = Sepolia).
+    pub const SCI_NAME: &'static str = "sci";
     /// All chain names accepted by Base chain parsers.
     pub const SUPPORTED_NAMES: &'static [&'static str] = &[
         Self::MAINNET_NAME,
@@ -154,6 +156,7 @@ impl ChainConfig {
         Self::SEPOLIA_NAME,
         Self::ZERONET_NAME,
         Self::DEVNET_NAME,
+        Self::SCI_NAME,
     ];
 
     /// Base Mainnet chain configuration.
@@ -176,9 +179,14 @@ impl ChainConfig {
         &ZERONET
     }
 
+    /// SCI Chain configuration (chainId 42001, L1 = Sepolia).
+    pub const fn sci() -> &'static Self {
+        &SCI
+    }
+
     /// Returns all known chain configurations, including devnet.
-    pub const fn all() -> [&'static Self; 4] {
-        [&MAINNET, &SEPOLIA, &DEVNET, &ZERONET]
+    pub const fn all() -> [&'static Self; 5] {
+        [&MAINNET, &SEPOLIA, &DEVNET, &ZERONET, &SCI]
     }
 
     /// Looks up a chain config by CLI chain name.
@@ -188,6 +196,7 @@ impl ChainConfig {
             Self::SEPOLIA_NAME | Self::SEPOLIA_ALIAS => Some(Self::sepolia()),
             Self::ZERONET_NAME => Some(Self::zeronet()),
             Self::DEVNET_NAME => Some(Self::devnet()),
+            Self::SCI_NAME => Some(Self::sci()),
             _ => None,
         }
     }
@@ -198,6 +207,7 @@ impl ChainConfig {
             8453 => Some(&MAINNET),
             84532 => Some(&SEPOLIA),
             763360 => Some(&ZERONET),
+            42001 => Some(&SCI),
             _ => None,
         }
     }
@@ -547,6 +557,64 @@ const ZERONET: ChainConfig = ChainConfig {
     genesis_json: include_str!("../res/genesis/zeronet_base.json"),
 };
 
+// SCI Chain (chainId 42001) with Sepolia as L1. All values are pinned to the live
+// deployment's rollup config (`.devnet/l2/configs/rollup.json` on the node) and the
+// on-chain SystemConfig — see sci/docs/upgrade/sci-tee-prover-sepolia-deployment-plan.md.
+// Registering this chain makes `Registry::rollup_config(42001)` and the enclave's
+// `config_hash` (both derived from `ChainConfig::all()`) resolve, which the TEE prover
+// host/enclave require at startup.
+const SCI: ChainConfig = ChainConfig {
+    chain_id: 42001,
+    l1_chain_id: 11155111,
+
+    block_time: 2,
+    seq_window_size: 3600,
+    max_sequencer_drift: 600,
+    channel_timeout: 300,
+
+    bedrock_block: 0,
+    regolith_timestamp: 0,
+    canyon_timestamp: 0,
+    delta_timestamp: 0,
+    ecotone_timestamp: 0,
+    fjord_timestamp: 0,
+    granite_timestamp: 0,
+    holocene_timestamp: 0,
+    pectra_blob_schedule_timestamp: None,
+    isthmus_timestamp: 0,
+    jovian_timestamp: 0,
+    azul_timestamp: Some(1_781_761_000),
+    beryl_timestamp: None,
+
+    genesis_l1_hash: b256!("d75a2b18e7254467c167b85791af7fa5b98c04d08739edb147c8497cad44827e"),
+    genesis_l1_number: 11_085_005,
+    genesis_l2_hash: b256!("c2411d1ebb8bbd80bc285737091070e613c3e4c084a06fd60c27cceb6225c340"),
+    genesis_l2_number: 0,
+    genesis_l2_time: 1_781_760_960,
+    genesis_batcher_address: address!("f0c3d0f5fc966e2d3b2d79416de2b437b419d940"),
+    genesis_overhead: U256::ZERO,
+    genesis_scalar: uint!(0x010000000000000000000000000000000000000000000000000c3c9d00000558_U256),
+    genesis_gas_limit: 60_000_000,
+
+    eip1559_elasticity: 6,
+    eip1559_denominator: 50,
+    eip1559_denominator_canyon: 250,
+
+    batch_inbox_address: address!("0049ca28d70c7c70e2eb7b48ef75044bc2ad80b8"),
+    deposit_contract_address: address!("d4b05f9944dd530965e0a7cd66af205e13b69036"),
+    system_config_address: address!("ea2ffcaa6370cf35aff530fc79871c0beaf95aa9"),
+    protocol_versions_address: address!("de2556993962c1e9b56cea045e22ecd46ab3ce5d"),
+
+    unsafe_block_signer: Some(address!("e73C3521b8A7d9E1E9aE7fFacDD8A1b1f5DdBeB7")),
+
+    max_gas_limit: 90_000_000,
+    prune_delete_limit: 10_000,
+
+    bootnodes: Bootnodes::EMPTY,
+
+    genesis_json: include_str!("../res/genesis/sci_sepolia.json"),
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -556,6 +624,18 @@ mod tests {
         // Guard against drift between the hardcoded `FeeConfig::BASE_MAINNET` constant
         // (used as a serde default) and the canonical `ChainConfig::mainnet().fee_config()`.
         assert_eq!(ChainConfig::mainnet().fee_config(), FeeConfig::base_mainnet());
+    }
+
+    #[test]
+    fn sci_chain_registered() {
+        // SCI Chain (42001, L1 = Sepolia) must resolve by id and by name, and be
+        // included in `all()` so the prover's Registry / enclave config-hash maps
+        // (both derived from `all()`) pick it up.
+        let sci = ChainConfig::by_chain_id(42001).expect("SCI chain 42001 must be registered");
+        assert_eq!(sci.chain_id, 42001);
+        assert_eq!(sci.l1_chain_id, 11_155_111);
+        assert_eq!(ChainConfig::by_name(ChainConfig::SCI_NAME), Some(sci));
+        assert!(ChainConfig::all().iter().any(|c| c.chain_id == 42001));
     }
 
     #[test]
