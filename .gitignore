@@ -24,3 +24,6 @@ sci/docs/test/
 
 # SCI upgrade / uplift working notes (Base version bumps, CGT, EIP-8130) — local only, never committed.
 sci/docs/upgrade/
+
+# SCI operational key-lessons / incident postmortems — local only, never committed.
+sci/docs/key-lessons/
