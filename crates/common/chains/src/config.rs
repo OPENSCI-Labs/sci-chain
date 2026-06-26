@@ -73,6 +73,11 @@ pub struct ChainConfig {
     pub genesis_scalar: U256,
     /// Genesis gas limit.
     pub genesis_gas_limit: u64,
+    /// Genesis minimum base fee (Jovian `min_base_fee`), folded into the genesis
+    /// [`SystemConfig`]. `None` for OP-Stack chains that floor at 0; SCI sets this to
+    /// 1 gwei so the proof guest reconstructs L2 block 1's `extraData` (and thus its
+    /// header hash) identically to the canonical chain.
+    pub genesis_min_base_fee: Option<u64>,
 
     // Base fee params
     /// EIP-1559 elasticity multiplier.
@@ -255,7 +260,7 @@ impl ChainConfig {
                 eip1559_elasticity: None,
                 operator_fee_scalar: None,
                 operator_fee_constant: None,
-                min_base_fee: None,
+                min_base_fee: self.genesis_min_base_fee,
                 da_footprint_gas_scalar: None,
             }),
         }
@@ -339,6 +344,7 @@ const MAINNET: ChainConfig = ChainConfig {
     genesis_overhead: uint!(0xbc_U256),
     genesis_scalar: uint!(0xa6fe0_U256),
     genesis_gas_limit: 30_000_000,
+    genesis_min_base_fee: None,
 
     eip1559_elasticity: 6,
     eip1559_denominator: 50,
@@ -411,6 +417,7 @@ const SEPOLIA: ChainConfig = ChainConfig {
     genesis_overhead: uint!(0x834_U256),
     genesis_scalar: uint!(0xf4240_U256),
     genesis_gas_limit: 25_000_000,
+    genesis_min_base_fee: None,
 
     eip1559_elasticity: 10,
     eip1559_denominator: 50,
@@ -474,6 +481,7 @@ const DEVNET: ChainConfig = ChainConfig {
     genesis_overhead: U256::ZERO,
     genesis_scalar: U256::ZERO,
     genesis_gas_limit: 30_000_000,
+    genesis_min_base_fee: None,
 
     eip1559_elasticity: 6,
     eip1559_denominator: 50,
@@ -526,6 +534,7 @@ const ZERONET: ChainConfig = ChainConfig {
     genesis_overhead: U256::ZERO,
     genesis_scalar: uint!(0x010000000000000000000000000000000000000000000000000c3c9d00000558_U256),
     genesis_gas_limit: 25_000_000,
+    genesis_min_base_fee: None,
 
     eip1559_elasticity: 6,
     eip1559_denominator: 50,
@@ -586,23 +595,24 @@ const SCI: ChainConfig = ChainConfig {
     azul_timestamp: Some(1_781_761_000),
     beryl_timestamp: None,
 
-    genesis_l1_hash: b256!("d75a2b18e7254467c167b85791af7fa5b98c04d08739edb147c8497cad44827e"),
-    genesis_l1_number: 11_085_005,
-    genesis_l2_hash: b256!("c2411d1ebb8bbd80bc285737091070e613c3e4c084a06fd60c27cceb6225c340"),
+    genesis_l1_hash: b256!("e84b21e6377e4ddc4ddd63b819c36f4084a7f386c9d6ad340cc0993f471e8702"),
+    genesis_l1_number: 11_134_670,
+    genesis_l2_hash: b256!("b2edd6ed3af1aa076ba224693210000eeacb749a3c527289ac20e02303b3361d"),
     genesis_l2_number: 0,
-    genesis_l2_time: 1_781_760_960,
+    genesis_l2_time: 1_782_365_280,
     genesis_batcher_address: address!("f0c3d0f5fc966e2d3b2d79416de2b437b419d940"),
     genesis_overhead: U256::ZERO,
     genesis_scalar: uint!(0x010000000000000000000000000000000000000000000000000c3c9d00000558_U256),
     genesis_gas_limit: 60_000_000,
+    genesis_min_base_fee: Some(1_000_000_000),
 
     eip1559_elasticity: 6,
     eip1559_denominator: 50,
     eip1559_denominator_canyon: 250,
 
     batch_inbox_address: address!("0049ca28d70c7c70e2eb7b48ef75044bc2ad80b8"),
-    deposit_contract_address: address!("d4b05f9944dd530965e0a7cd66af205e13b69036"),
-    system_config_address: address!("ea2ffcaa6370cf35aff530fc79871c0beaf95aa9"),
+    deposit_contract_address: address!("df28C5D647Fd2de8875cb3faaa6d29cEBB20cd5d"),
+    system_config_address: address!("85b3fE56dEa81eb7D3d0d1488b5EF6fE36a938Da"),
     protocol_versions_address: address!("de2556993962c1e9b56cea045e22ecd46ab3ce5d"),
 
     unsafe_block_signer: Some(address!("e73C3521b8A7d9E1E9aE7fFacDD8A1b1f5DdBeB7")),
