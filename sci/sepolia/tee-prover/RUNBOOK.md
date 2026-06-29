@@ -5,7 +5,7 @@ on the **already-live** OP-Stack DisputeGameFactory, in dev-bypass + shadow mode
 (no AWS Nitro attestation; `respectedGameType` is NOT flipped, so the existing
 permissioned withdrawal path is unaffected).
 
-This runbook is run **on the deploy host** (`54.255.70.252`), where Sepolia geth is
+This runbook is run **on the deploy host** (`13.251.15.192`), where Sepolia geth is
 reachable at `http://localhost:8645` and the deployer key is available. The artifacts
 were prepared and compile-verified locally on 2026-06-24; see
 `sci/docs/upgrade/sci-tee-prover-sepolia-deployment-plan.md` §0/§3.
@@ -106,3 +106,46 @@ cast send <DevTEEProverRegistry> \
 After this, `isValidSigner(<ENCLAVE_SIGNER_ADDRESS>)` returns true and the proposer
 (Step 7) can submit type-621 games. Shadow mode: do NOT flip `respectedGameType` until
 the type-621 games are observed resolving correctly.
+
+## 6. Pre-flip checklist for `respectedGameType` (1 → 621)
+
+Flipping `OptimismPortal.respectedGameType` to 621 is a **condition-gated, manual
+governance action with no scheduled date** — it is NOT part of the Step 8 systemd
+automation. Today `respectedGameType = 1` (permissioned, unaffected). Flip only after
+**all** gates below are green; full rationale is in
+`sci/docs/upgrade/sci-tee-prover-sepolia-deployment-plan.md` §9.
+
+Gates (in dependency order):
+
+- [ ] **G1 — type-621 games resolve correctly (primary gate).** A sustained observation
+      window: the proposer keeps creating games, each clears finality
+      (`disputeGameFinalityDelaySeconds`) and resolves with no unexpected challenge.
+- [ ] **G2 — real DelayedWETH.** Replace `MockDelayedWETH` (shadow) with a real
+      DelayedWETH and rebind the AggregateVerifier.
+- [ ] **G3 — ZK challenge leg wired.** Currently TEE-only dev bypass (`DevTEEProverRegistry`
+      + `addDevSigner`, no RiscZero/Boundless/`NitroEnclaveVerifier`, ZK hashes are base
+      placeholders). Enable the `AggregateVerifier` ZK path for full multiproof safety.
+- [ ] **G4 — real Nitro attestation.** Replace dev-bypass signer registration
+      (`addDevSigner`) with real AWS Nitro attestation-based registration (PCR0 verified
+      via `NitroEnclaveVerifier`).
+- [ ] **G5 — challenger funded + running.** `teeChallenger` (`0xFF6E90…`) must be funded
+      and active so a respected game type has real adversarial defense (currently 0 ETH).
+- [ ] **G6 — anchor + finality params reviewed.** Confirm the ASR keeps serving a
+      type-621 anchor, and `proofMaturityDelaySeconds` / `disputeGameFinalityDelaySeconds`
+      are production values.
+
+Flip (only after G1–G6 green):
+
+- [ ] **F1 —** Guardian calls `setRespectedGameType(621)` on `OptimismPortal` (governance key).
+- [ ] **F2 —** verify `respectedGameType() == 621`; end-to-end test one real withdrawal
+      through the type-621 finality path.
+- [ ] **F3 —** update `deploy-config/sci-sepolia.json` (`respectedGameType: 1 → 621`) and
+      `DEPLOYED.md` to keep repo and chain in sync.
+
+Rollback:
+
+- [ ] Keep a rollback ready — if the type-621 path misbehaves, Guardian calls
+      `setRespectedGameType(1)` to revert to permissioned.
+
+Status (2026-06-29): G1's observation window just started (the proposer was funded and
+the L1 node fixed today after a weekend stall); G2–G5 not yet started.
