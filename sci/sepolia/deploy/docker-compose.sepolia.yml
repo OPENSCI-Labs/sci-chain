@@ -326,7 +326,7 @@ services:
       - --private-key
       - ${BATCHER_KEY}
       - --max-channel-duration
-      - "2"
+      - "40"
       - --poll-interval
       - "1"
       - --sub-safety-margin
