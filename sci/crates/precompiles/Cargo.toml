@@ -24,7 +24,6 @@ workspace = true
 # registered in the workspace `Cargo.toml` so all workspace tooling still
 # sees it via `sci-revm-shim`.
 revm = { path = "../revm-shim", package = "sci-revm-shim" }
-tracing.workspace = true
 thiserror.workspace = true
 scoped-tls = "1.0"
 derive_more = { workspace = true, default-features = false }
@@ -60,6 +59,3 @@ base-common-consensus.workspace = true
 [features]
 default = []
 test-utils = []
-# Opt-in: exercises EvmPrecompileStorageProvider against a real EvmFactory. Off by default
-# because it pulls heavyweight EVM-factory deps into the test profile.
-evm-bridge-tests = []

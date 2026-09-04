@@ -53,7 +53,7 @@ const TIP20_APPROVE_SELECTOR: [u8; 4] = ITIP20::approveCall::SELECTOR;
 const TIP20_TRANSFER_WITH_MEMO_SELECTOR: [u8; 4] = ITIP20::transferWithMemoCall::SELECTOR;
 
 #[inline]
-pub fn is_constrained_tip20_selector(selector: [u8; 4]) -> bool {
+pub const fn is_constrained_tip20_selector(selector: [u8; 4]) -> bool {
     matches!(
         selector,
         TIP20_TRANSFER_SELECTOR | TIP20_APPROVE_SELECTOR | TIP20_TRANSFER_WITH_MEMO_SELECTOR
@@ -63,20 +63,20 @@ pub fn is_constrained_tip20_selector(selector: [u8; 4]) -> bool {
 /// Key information stored in the precompile
 ///
 /// Storage layout (packed into single slot, right-aligned):
-/// - byte 0: signature_type (u8)
+/// - byte 0: `signature_type` (u8)
 /// - bytes 1-8: expiry (u64, little-endian)
-/// - byte 9: enforce_limits (bool)
-/// - byte 10: is_revoked (bool)
+/// - byte 9: `enforce_limits` (bool)
+/// - byte 10: `is_revoked` (bool)
 #[derive(Debug, Clone, Default, PartialEq, Eq, Storable)]
 pub struct AuthorizedKey {
-    /// Signature type: 0 = secp256k1, 1 = P256, 2 = WebAuthn
+    /// Signature type: 0 = secp256k1, 1 = P256, 2 = `WebAuthn`
     pub signature_type: u8,
     /// Block timestamp when key expires
     pub expiry: u64,
     /// Whether to enforce spending limits for this key
     pub enforce_limits: bool,
     /// Whether this key has been revoked. Once revoked, a key cannot be re-authorized
-    /// with the same key_id. This prevents replay attacks.
+    /// with the same `key_id`. This prevents replay attacks.
     pub is_revoked: bool,
 }
 
@@ -178,7 +178,7 @@ impl AccountKeychain {
     /// Create a hash key for account+key scoped storage rows.
     ///
     /// This is used to access account-key rows like `spending_limits[key][token]` and
-    /// `key_scopes[key]`. The hash combines account and key_id to avoid triple nesting.
+    /// `key_scopes[key]`. The hash combines account and `key_id` to avoid triple nesting.
     pub fn spending_limit_key(account: Address, key_id: Address) -> B256 {
         let mut data = [0u8; 40];
         data[..20].copy_from_slice(account.as_slice());
@@ -210,7 +210,7 @@ impl AccountKeychain {
     /// - `ExpiryInPast` — expiry must be in the future (enforced since T0)
     /// - `KeyAlreadyExists` — a key with this ID is already registered
     /// - `KeyAlreadyRevoked` — revoked keys cannot be re-authorized
-    /// - `InvalidSignatureType` — must be Secp256k1, P256, or WebAuthn
+    /// - `InvalidSignatureType` — must be Secp256k1, P256, or `WebAuthn`
     pub fn authorize_key(
         &mut self,
         msg_sender: Address,
@@ -422,10 +422,9 @@ impl AccountKeychain {
 
         // Convert u8 signature_type to SignatureType enum
         let signature_type = match key.signature_type {
-            0 => SignatureType::Secp256k1,
             1 => SignatureType::P256,
             2 => SignatureType::WebAuthn,
-            _ => SignatureType::Secp256k1, // Default fallback
+            _ => SignatureType::Secp256k1, // Default fallback (includes 0)
         };
 
         Ok(KeyInfo {
@@ -598,8 +597,8 @@ impl AccountKeychain {
     ///
     /// SECURITY CRITICAL: This must be called by the transaction validation logic
     /// BEFORE the transaction is executed, to store which key authorized the transaction.
-    /// - If key_id is Address::ZERO (main key), this should store Address::ZERO
-    /// - If key_id is a specific key address, this should store that key
+    /// - If `key_id` is `Address::ZERO` (main key), this should store `Address::ZERO`
+    /// - If `key_id` is a specific key address, this should store that key
     ///
     /// This creates a secure channel between validation and the precompile to ensure
     /// only the main key can authorize/revoke other keys.
@@ -2310,7 +2309,7 @@ mod tests {
         })
     }
 
-    /// Test that spending limits are only enforced when msg_sender == tx_origin.
+    /// Test that spending limits are only enforced when `msg_sender` == `tx_origin`.
     ///
     /// This test verifies the fix for the bug where spending limits were incorrectly
     /// applied to contract-initiated transfers. The scenario:
@@ -3856,9 +3855,6 @@ mod tests {
                     )?;
                     assert_eq!(remaining.remaining, U256::ZERO);
                     assert_eq!(remaining.periodEnd, 0);
-
-                    // T2+: revoked key returns zero directly
-                    assert_eq!(StorageCtx.counter_sload() - sload_before, 1);
                 } else {
                     // pre-T2: revoked keys are NOT zeroed; the raw stored limit is returned
                     let remaining = keychain.get_remaining_limit(getRemainingLimitCall {
@@ -3867,10 +3863,9 @@ mod tests {
                         token,
                     })?;
                     assert_eq!(remaining, U256::from(100u64));
-
-                    // pre-T2: direct storage read without reading the key
-                    assert_eq!(StorageCtx.counter_sload() - sload_before, 1);
                 }
+                // Both paths read the key exactly once (T2+ zeroes in place, pre-T2 reads raw).
+                assert_eq!(StorageCtx.counter_sload() - sload_before, 1);
 
                 Ok::<_, eyre::Report>(())
             })?;

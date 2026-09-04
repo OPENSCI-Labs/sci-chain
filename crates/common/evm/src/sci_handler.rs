@@ -3,7 +3,7 @@
 //! [`SciHandler`] wraps [`BaseHandler`] and delegates every method to it verbatim except
 //! [`Handler::validate_against_state_and_deduct_caller`], which — after the inner
 //! handler does the usual gas pre-pay / nonce bump — calls
-//! [`sci_precompiles::run_aa_keychain_hook`] to enforce CircuitBreaker, call scope, and
+//! [`sci_precompiles::run_aa_keychain_hook`] to enforce `CircuitBreaker`, call scope, and
 //! spending-limit constraints for AA (`0x76`) agent txs whose `root` is set. Deposit
 //! (system) txs short-circuit so OP-Stack predeploy ticks aren't subjected to keychain
 //! checks.
@@ -124,8 +124,9 @@ where
             // `caller` overridden to `root` and the per-call target/value/input).
             let frame_init = {
                 let ctx = evm.ctx_mut();
-                let mut memory =
-                    SharedMemory::new_with_buffer(ctx.local().shared_memory_buffer().clone());
+                let mut memory = SharedMemory::new_with_buffer(std::rc::Rc::clone(
+                    ctx.local().shared_memory_buffer(),
+                ));
                 memory.set_memory_limit(ctx.cfg().memory_limit());
                 let frame_input = match call.to {
                     TxKind::Call(target) => {
@@ -287,12 +288,12 @@ where
                 } else {
                     (fp, signer, signer_before - signer_after) // fee_payer covers the shortfall
                 };
-                if amount != U256::ZERO {
-                    if let Some(err) = evm.ctx().journal_mut().transfer(from, to, amount)? {
-                        return Err(ERROR::from_string(format!(
-                            "fee_payer gas reconcile failed: {err:?}"
-                        )));
-                    }
+                if amount != U256::ZERO
+                    && let Some(err) = evm.ctx().journal_mut().transfer(from, to, amount)?
+                {
+                    return Err(ERROR::from_string(format!(
+                        "fee_payer gas reconcile failed: {err:?}"
+                    )));
                 }
             }
             None => self.inner.validate_against_state_and_deduct_caller(evm)?,
@@ -412,10 +413,10 @@ where
         self.inner.reimburse_caller(evm, frame_result)?;
         let after = evm.ctx().journal_mut().load_account(signer)?.data.info.balance;
         let refund = after.saturating_sub(before);
-        if refund != U256::ZERO {
-            if let Some(err) = evm.ctx().journal_mut().transfer(signer, fp, refund)? {
-                return Err(ERROR::from_string(format!("fee_payer refund failed: {err:?}")));
-            }
+        if refund != U256::ZERO
+            && let Some(err) = evm.ctx().journal_mut().transfer(signer, fp, refund)?
+        {
+            return Err(ERROR::from_string(format!("fee_payer refund failed: {err:?}")));
         }
         Ok(())
     }

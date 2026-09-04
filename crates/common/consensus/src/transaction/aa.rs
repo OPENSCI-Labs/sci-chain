@@ -404,7 +404,7 @@ mod tests {
 /// The proof client / executor are generic over `F::Tx: FromRecoveredTx<BaseTxEnvelope>`
 /// (see `crates/proof/client/{driver,prologue}.rs`). This test exercises exactly that
 /// conversion for the new AA variant and asserts the produced [`TxEnv`] matches the
-/// AA tx's first call (the PoC single-call execution semantics), proving the proof
+/// AA tx's first call (the `PoC` single-call execution semantics), proving the proof
 /// executor will build the correct EVM environment for an AA transaction.
 #[cfg(all(test, feature = "evm"))]
 mod evm_tests {

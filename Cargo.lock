@@ -19861,7 +19861,6 @@ dependencies = [
  "scoped-tls",
  "tempo-chainspec-shim",
  "thiserror 2.0.18",
- "tracing",
 ]
 
 [[package]]

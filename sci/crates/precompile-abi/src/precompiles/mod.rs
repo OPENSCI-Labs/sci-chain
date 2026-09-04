@@ -20,7 +20,7 @@ pub use sci_agent_state::{
     SciAgentStateEvent, isTrippedCall, tripKeyCall, untripKeyCall,
 };
 
-/// AccountKeychain precompile address.
+/// `AccountKeychain` precompile address.
 pub const ACCOUNT_KEYCHAIN_ADDRESS: Address =
     address!("0xAAAAAAAA00000000000000000000000000000000");
 

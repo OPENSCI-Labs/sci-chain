@@ -37,7 +37,7 @@ tempo_precompiles_macros::storable_nested_arrays!();
 /// # Element Access
 ///
 /// Use `at(index)` to get a `Slot<T>` for individual element operations:
-/// - For packed elements (T::BYTES ≤ 16): returns a packed `Slot<T>` with byte offsets
+/// - For packed elements (`T::BYTES` ≤ 16): returns a packed `Slot<T>` with byte offsets
 /// - For unpacked elements: returns a full `Slot<T>` for the element's dedicated slot
 /// - Returns `None` if index is out of bounds
 ///
@@ -72,7 +72,7 @@ impl<T: StorableType, const N: usize> ArrayHandler<T, N> {
 
     /// Returns a `Slot` accessor for full-array operations.
     #[inline]
-    fn as_slot(&self) -> Slot<[T; N]> {
+    const fn as_slot(&self) -> Slot<[T; N]> {
         Slot::new(self.base_slot, self.address)
     }
 
@@ -81,7 +81,7 @@ impl<T: StorableType, const N: usize> ArrayHandler<T, N> {
     /// Single-slot arrays pack all fields into this slot.
     /// Multi-slot arrays use consecutive slots starting from this base.
     #[inline]
-    pub fn base_slot(&self) -> ::alloy_primitives::U256 {
+    pub const fn base_slot(&self) -> ::alloy_primitives::U256 {
         self.base_slot
     }
 

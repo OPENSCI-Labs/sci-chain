@@ -31,7 +31,7 @@ pub struct BaseTransaction<T: Transaction> {
     /// SCI account-abstraction (AA) transaction parts (Plan A, type `0x76`).
     ///
     /// `Some` iff this env was built from a [`BaseTxEnvelope::Aa`]. The base [`TxEnv`]
-    /// carries only the AA tx's first call (the legacy PoC view); this field carries the
+    /// carries only the AA tx's first call (the legacy `PoC` view); this field carries the
     /// full batch + identity so [`crate::SciHandler`] can run the multi-call executor
     /// (calls run with `msg.sender == root` when set). `None` for every other tx type.
     pub aa: Option<AaTransactionParts>,

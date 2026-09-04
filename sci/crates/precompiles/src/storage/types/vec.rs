@@ -117,7 +117,7 @@ where
 ///
 /// Use `at(index)` to get a `Slot<T>` for individual element operations with OOB guarantees.
 /// Use `[index]` for its efficient counterpart without the check.
-/// - For packed elements (T::BYTES ≤ 16): returns a packed `Slot<T>` with byte offsets
+/// - For packed elements (`T::BYTES` ≤ 16): returns a packed `Slot<T>` with byte offsets
 /// - For unpacked elements: returns a full `Slot<T>` for the element's dedicated slot
 ///
 /// # Example
@@ -206,7 +206,7 @@ where
 
     /// Returns the slot that stores the length of the dynamic array.
     #[inline]
-    pub fn len_slot(&self) -> ::alloy_primitives::U256 {
+    pub const fn len_slot(&self) -> ::alloy_primitives::U256 {
         self.len_slot
     }
 
@@ -221,7 +221,7 @@ where
 
     /// Returns a `Slot` accessor for full-vector operations.
     #[inline]
-    fn as_slot(&self) -> Slot<Vec<T>> {
+    const fn as_slot(&self) -> Slot<Vec<T>> {
         Slot::new(self.len_slot, self.address)
     }
 

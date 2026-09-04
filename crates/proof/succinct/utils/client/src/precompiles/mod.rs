@@ -596,9 +596,9 @@ mod tests {
         }
     }
 
-    /// The zkVM provider must resolve the AccountKeychain precompile exactly like the
+    /// The zkVM provider must resolve the `AccountKeychain` precompile exactly like the
     /// EL's `PrecompilesMap` lookup does — a direct `getKey` call executes the keychain
-    /// (returning a zeroed KeyInfo on empty state) instead of falling through to the
+    /// (returning a zeroed `KeyInfo` on empty state) instead of falling through to the
     /// `0xef` placeholder account code.
     #[test]
     fn test_sci_keychain_call_resolves() {
@@ -623,7 +623,7 @@ mod tests {
         assert!(!result.output.is_empty(), "getKey returns an ABI-encoded KeyInfo");
     }
 
-    /// Same for the SciAgentState precompile (`isTripped` view).
+    /// Same for the `SciAgentState` precompile (`isTripped` view).
     #[test]
     fn test_sci_agent_state_call_resolves() {
         use alloy_sol_types::SolCall;

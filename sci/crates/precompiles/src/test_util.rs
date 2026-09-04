@@ -23,12 +23,12 @@ pub struct TIP20Setup {
 
 impl TIP20Setup {
     /// Tempo-compat: configure pathUSD for `admin`. No-op in SCI.
-    pub fn path_usd(admin: Address) -> Self {
+    pub const fn path_usd(admin: Address) -> Self {
         Self { _account: admin }
     }
 
     /// Tempo-compat: apply the staged configuration. No-op in SCI.
-    pub fn apply(self) -> Result<()> {
+    pub const fn apply(self) -> Result<()> {
         Ok(())
     }
 }
@@ -77,7 +77,7 @@ pub fn check_selector_coverage<P: Precompile>(
 ) -> Vec<([u8; 4], &'static str)> {
     let mut unsupported_selectors = Vec::new();
 
-    for selector in selectors.iter() {
+    for selector in selectors {
         let mut calldata = selector.to_vec();
         calldata.extend_from_slice(&[0u8; 32]);
 

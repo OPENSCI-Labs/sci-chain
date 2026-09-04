@@ -14,7 +14,6 @@ use revm::{
     handler::EvmTr,
     primitives::TxKind,
 };
-use tempo_chainspec::hardfork::TempoHardfork;
 use tempo_contracts::precompiles::isTrippedCall;
 
 use crate::{
@@ -189,11 +188,11 @@ where
                 let e = totals_per_token.entry(Address::ZERO).or_insert(U256::ZERO);
                 *e = e.saturating_add(call.value);
             }
-            if let TxKind::Call(target) = call.to {
-                if let Some((token, amount)) = classify_token_call(root, target, &call.input) {
-                    let e = totals_per_token.entry(token).or_insert(U256::ZERO);
-                    *e = e.saturating_add(amount);
-                }
+            if let TxKind::Call(target) = call.to
+                && let Some((token, amount)) = classify_token_call(root, target, &call.input)
+            {
+                let e = totals_per_token.entry(token).or_insert(U256::ZERO);
+                *e = e.saturating_add(amount);
             }
         }
         if !gas_reservation.is_zero() {
@@ -207,7 +206,7 @@ where
         // no quota (strong-R1).
         let key = kc.keys[root][session_key].read()?;
         if key.enforce_limits {
-            let now = StorageCtx::default().timestamp().saturating_to::<u64>();
+            let now = StorageCtx.timestamp().saturating_to::<u64>();
             for (token, total) in &totals_per_token {
                 let remaining = kc.effective_remaining_limit(root, session_key, *token, now)?;
                 if *total > remaining {
@@ -282,10 +281,10 @@ where
         // Recognized ERC-20 transfers/approves (D3-B, incl. transferWithMemo and
         // transferFrom(from == root)) → per-token.
         for call in calls {
-            if let TxKind::Call(target) = call.to {
-                if let Some((token, amount)) = classify_token_call(root, target, &call.input) {
-                    kc.verify_and_update_spending(root, session_key, token, amount)?;
-                }
+            if let TxKind::Call(target) = call.to
+                && let Some((token, amount)) = classify_token_call(root, target, &call.input)
+            {
+                kc.verify_and_update_spending(root, session_key, token, amount)?;
             }
         }
         Ok(())

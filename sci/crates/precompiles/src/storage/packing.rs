@@ -61,7 +61,7 @@ impl FieldLocation {
 /// Create a bit mask for a value of the given byte size.
 ///
 /// For values less than 32 bytes, returns a mask with the appropriate number of bits set.
-/// For 32-byte values, returns U256::MAX.
+/// For 32-byte values, returns `U256::MAX`.
 #[inline]
 pub fn create_element_mask(byte_count: usize) -> U256 {
     if byte_count >= 32 { U256::MAX } else { (U256::ONE << (byte_count * 8)) - U256::ONE }

@@ -1,4 +1,4 @@
-//! Minimal ERC-20 interface — only the selectors the AccountKeychain uses to identify
+//! Minimal ERC-20 interface — only the selectors the `AccountKeychain` uses to identify
 //! recipient-constrained token calls.
 
 crate::sol! {

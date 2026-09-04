@@ -50,7 +50,7 @@ const CHAIN_ID: u64 = 42001;
 /// EVM bytecode that unconditionally reverts: PUSH1 0, PUSH1 0, REVERT.
 const REVERT_BYTECODE: [u8; 5] = [0x60, 0x00, 0x60, 0x00, 0xfd];
 
-/// Test fixture: a fresh BaseEvm with funded EOAs and the SCI precompiles wired.
+/// Test fixture: a fresh `BaseEvm` with funded EOAs and the SCI precompiles wired.
 struct AgentFixture {
     evm: TestEvm,
     /// Funded EOA used as the "root" account.
@@ -87,8 +87,7 @@ impl AgentFixture {
 
         let cfg =
             CfgEnv::new_with_spec(BaseSpecId::new(BaseUpgrade::Isthmus)).with_chain_id(CHAIN_ID);
-        let mut block = BlockEnv::default();
-        block.basefee = 0; // no basefee in tests; we still pay gas_price
+        let block = BlockEnv { basefee: 0, ..Default::default() };
         let env = EvmEnv { cfg_env: cfg, block_env: block };
         let evm = BaseEvmFactory::default().create_evm(db, env);
 
@@ -124,7 +123,7 @@ impl AgentFixture {
         Ok(outcome.result)
     }
 
-    /// Builds and runs an AA (`0x76`) agent tx: signer = session_key, executing `calls`
+    /// Builds and runs an AA (`0x76`) agent tx: signer = `session_key`, executing `calls`
     /// on behalf of `root` (when set), with optional sponsored gas.
     fn send_aa_tx(
         &mut self,
@@ -209,8 +208,8 @@ impl AgentFixture {
         db.insert_account_info(addr, info);
     }
 
-    /// Trips a session key via the SciAgentState precompile (caller must be the
-    /// AgentCircuitBreaker predeploy address — mirrored here directly).
+    /// Trips a session key via the `SciAgentState` precompile (caller must be the
+    /// `AgentCircuitBreaker` predeploy address — mirrored here directly).
     fn trip_key(&mut self, session_key: Address) {
         let calldata = tripKeyCall { sessionKey: session_key }.abi_encode();
         let nonce = self.next_nonce(AGENT_CIRCUIT_BREAKER_ADDRESS);

@@ -3,7 +3,7 @@
 //! Currently exposes the [`AccountKeychain`] precompile (at
 //! [`tempo_contracts::precompiles::ACCOUNT_KEYCHAIN_ADDRESS`]), which manages session keys and
 //! per-token spending limits at the protocol level, and the [`SciAgentState`] precompile
-//! (SCI-only CircuitBreaker trip state, at
+//! (SCI-only `CircuitBreaker` trip state, at
 //! [`tempo_contracts::precompiles::SCI_AGENT_STATE_ADDRESS`]).
 //!
 //! ## revm shim
@@ -18,6 +18,10 @@
 //! patches.
 
 #![cfg_attr(not(test), warn(unused_crate_dependencies))]
+#![allow(missing_docs)]
+#![allow(missing_debug_implementations)]
+#![allow(clippy::needless_pass_by_ref_mut)]
+#![allow(clippy::option_if_let_else)]
 
 /// SCI-facing re-export of [`tempo_chainspec::hardfork::TempoHardfork`] under the SCI name.
 /// The keychain source uses `TempoHardfork` internally (for verbatim Tempo compatibility);
@@ -63,12 +67,12 @@ use crate::storage::StorageCtx;
 /// Input per word cost. Covers ABI decoding and cloning of input into call data.
 pub const INPUT_PER_WORD_COST: u64 = 6;
 
-/// Gas cost for `ecrecover` signature verification (used by KeyAuthorization and Permit).
+/// Gas cost for `ecrecover` signature verification (used by `KeyAuthorization` and Permit).
 pub const ECRECOVER_GAS: u64 = 3_000;
 
 /// Returns the gas cost for decoding calldata of the given length, rounded up to word boundaries.
 #[inline]
-pub fn input_cost(calldata_len: usize) -> u64 {
+pub const fn input_cost(calldata_len: usize) -> u64 {
     calldata_len.div_ceil(32).saturating_mul(INPUT_PER_WORD_COST as usize) as u64
 }
 
@@ -207,6 +211,7 @@ pub fn sci_precompiles<Spec: Copy + 'static>(cfg: &CfgEnv<Spec>) -> PrecompilesM
 }
 
 /// Dispatches a parameterless view call, encoding the return via `T`.
+#[allow(dead_code)]
 #[inline]
 pub(crate) fn metadata<T: SolCall>(f: impl FnOnce() -> Result<T::Return>) -> PrecompileResult {
     f().into_precompile_result(0, 0, |ret| T::abi_encode_returns(&ret).into())
@@ -222,6 +227,7 @@ pub(crate) fn view<T: SolCall>(
 }
 
 /// Dispatches a state-mutating call that returns ABI-encoded data.
+#[allow(dead_code)]
 #[inline]
 pub(crate) fn mutate<T: SolCall>(
     call: T,
@@ -305,16 +311,15 @@ pub(crate) fn dispatch_call<T>(
     decode: impl FnOnce(&[u8]) -> core::result::Result<T, alloy_sol_types::Error>,
     f: impl FnOnce(T) -> PrecompileResult,
 ) -> PrecompileResult {
-    let storage = StorageCtx::default();
+    let storage = StorageCtx;
 
     if calldata.len() < 4 {
         if storage.spec().is_t1() {
             return Ok(storage.revert_output(Bytes::new()));
-        } else {
-            return Ok(storage.halt_output(PrecompileHalt::Other(
-                "Invalid input: missing function selector".into(),
-            )));
         }
+        return Ok(storage.halt_output(PrecompileHalt::Other(
+            "Invalid input: missing function selector".into(),
+        )));
     }
 
     let selector: [u8; 4] = calldata[..4].try_into().expect("calldata len >= 4");

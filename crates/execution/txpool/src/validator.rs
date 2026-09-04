@@ -6,7 +6,7 @@ use std::{
     },
 };
 
-use alloy_consensus::{BlockHeader, Transaction, Typed2718};
+use alloy_consensus::{BlockHeader, Transaction};
 use alloy_primitives::{Address, B256, U256};
 use base_common_chains::Upgrades;
 use base_common_evm::{BaseSpecId, L1BlockInfo};
@@ -41,7 +41,7 @@ static AA_GOSSIP_ENABLED: LazyLock<bool> = LazyLock::new(|| {
 
 /// Maximum number of inner calls in an AA (`0x76`) transaction batch.
 ///
-/// Pool-only DoS limit (see [`BaseTransactionValidator::ensure_aa_field_limits`]): bounds the
+/// Pool-only `DoS` limit (see [`BaseTransactionValidator::ensure_aa_field_limits`]): bounds the
 /// AA call batch and access-list cardinality at admission rather than at RLP decoding, so the
 /// core tx format stays flexible and a peer sending an oversized AA tx can be penalized.
 /// Mirrors the caps in Tempo's `crates/transaction-pool/src/validator.rs`.
@@ -276,7 +276,7 @@ where
     ///
     /// This allows reusing the same state provider across multiple transaction validations.
     ///
-    /// Pool-only DoS field limits for AA (`0x76`) transactions: bounds the call batch and the
+    /// Pool-only `DoS` field limits for AA (`0x76`) transactions: bounds the call batch and the
     /// access-list cardinality so a malicious peer cannot cheaply force expensive validation or
     /// bloat the pool with an oversized AA tx. No-op for non-AA transactions. Errors are
     /// [`BaseTxPoolError`] (`is_bad_transaction = true`), so an offending peer can be penalized.
@@ -398,10 +398,11 @@ where
         // other tx. The pooled type already 2718-encodes/decodes the AA variant (macro-derived),
         // and the pool<->network conversions go through `into_base_envelope` / `try_into_pooled`,
         // so gossip never hits the alloy-conversion `unreachable!` sites in `pooled.rs`.
-        if is_aa && !*AA_GOSSIP_ENABLED {
-            if let TransactionValidationOutcome::Valid { propagate, .. } = &mut outcome {
-                *propagate = false;
-            }
+        if is_aa
+            && !*AA_GOSSIP_ENABLED
+            && let TransactionValidationOutcome::Valid { propagate, .. } = &mut outcome
+        {
+            *propagate = false;
         }
 
         outcome
@@ -494,12 +495,12 @@ where
     }
 
     /// For a sponsored AA tx (`fee_payer != signer`; `fee_payer == root` per the handler),
-    /// verifies the fee_payer can cover the full economic cost (L2 gas + Σ call values + L1
+    /// verifies the `fee_payer` can cover the full economic cost (L2 gas + Σ call values + L1
     /// data fee). The signer's own balance is irrelevant — its pooled `cost` was overridden to
     /// its (zero) obligation by `AaTx::aa_signer_pool_cost` (see `transaction.rs`). No-op for
     /// non-AA or non-sponsored transactions.
     ///
-    /// Note: the pool does not track the fee_payer's balance across blocks, so a fee_payer that
+    /// Note: the pool does not track the `fee_payer`'s balance across blocks, so a `fee_payer` that
     /// drains *after* admission is not evicted — the tx stays pending and is skipped at block
     /// build (the handler rejects it). Same class as any external dependency.
     fn check_aa_sponsor_balance(
@@ -659,10 +660,10 @@ where
         address: Address,
         state: &Option<Box<dyn AccountInfoReader + Send>>,
     ) -> U256 {
-        if let Some(reader) = state.as_ref() {
-            if let Ok(Some(account)) = reader.basic_account(&address) {
-                return account.balance;
-            }
+        if let Some(reader) = state.as_ref()
+            && let Ok(Some(account)) = reader.basic_account(&address)
+        {
+            return account.balance;
         }
         self.client()
             .latest()
@@ -847,7 +848,7 @@ mod tests {
         }
     }
 
-    /// gas_cost of the AA fixture (`gas_limit * max_fee_per_gas`).
+    /// `gas_cost` of the AA fixture (`gas_limit * max_fee_per_gas`).
     const AA_GAS_COST: u128 = 50_000 * 1_000;
 
     /// Builds a signed SCI AA (`0x76`) transaction (signed by Alice = the session key) and its
@@ -881,7 +882,7 @@ mod tests {
     }
 
     /// An AA tx whose call batch exceeds [`MAX_AA_CALLS`] is rejected at admission (pool-only
-    /// DoS limit), so a peer flooding oversized AA txs over gossip can be penalized. See
+    /// `DoS` limit), so a peer flooding oversized AA txs over gossip can be penalized. See
     /// `sci/docs/plan-a-decentralization-gap.md`.
     #[tokio::test]
     async fn rejects_aa_with_too_many_calls() {
@@ -966,7 +967,7 @@ mod tests {
     }
 
     /// A fully-sponsored AA tx (`fee_payer == root != signer`) is admitted even though the
-    /// signing session key holds no funds — the fee_payer covers the cost and the keychain
+    /// signing session key holds no funds — the `fee_payer` covers the cost and the keychain
     /// records the signer as an authorized session key for the root.
     #[tokio::test]
     async fn admits_fundless_signer_when_fee_payer_funded() {

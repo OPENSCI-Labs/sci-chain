@@ -5,17 +5,17 @@
 //! `eth_sendRawTransaction`.
 //!
 //! Usage:
-//!   aa-txgen <priv_key_hex> <chain_id> <nonce> <to_addr> <value_wei>
+//!   aa-txgen <`priv_key_hex`> <`chain_id`> <nonce> <`to_addr`> <`value_wei`>
 //!
 //! Optional environment overrides:
-//!   MAX_FEE      max_fee_per_gas          (default 1_000_000_000)
-//!   MAX_PRIO     max_priority_fee_per_gas (default 1_000_000)
-//!   GAS_LIMIT    gas_limit                (default 100_000)
+//!   `MAX_FEE`      `max_fee_per_gas`          (default `1_000_000_000`)
+//!   `MAX_PRIO`     `max_priority_fee_per_gas` (default `1_000_000`)
+//!   `GAS_LIMIT`    `gas_limit`                (default `100_000`)
 //!   INPUT        first-call calldata hex  (default empty)
-//!   FEE_PAYER    fee_payer address        (default none)
+//!   `FEE_PAYER`    `fee_payer` address        (default none)
 //!   ROOT         root account calls run as (default none = run as signer)
-//!   CALL2_TO     second call target       (adds a 2nd call to exercise batch)
-//!   CALL2_VALUE  second call value_wei    (default 0 when CALL2_TO set)
+//!   `CALL2_TO`     second call target       (adds a 2nd call to exercise batch)
+//!   `CALL2_VALUE`  second call `value_wei`    (default 0 when `CALL2_TO` set)
 
 use std::{env, str::FromStr};
 

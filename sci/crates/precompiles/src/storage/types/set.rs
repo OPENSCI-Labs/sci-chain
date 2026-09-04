@@ -1,9 +1,9 @@
-//! OpenZeppelin's EnumerableSet implementation for EVM storage using Rust primitives.
+//! `OpenZeppelin`'s `EnumerableSet` implementation for EVM storage using Rust primitives.
 //! <https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/utils/structs/EnumerableSet.sol>
 //!
 //! # Storage Layout
 //!
-//! EnumerableSet uses two storage structures:
+//! `EnumerableSet` uses two storage structures:
 //! - **Values Vec**: A `Vec<T>` storing all set elements at `keccak256(base_slot)`
 //! - **Positions Mapping**: A `Mapping<T, u32>` at `base_slot + 1` storing 1-indexed positions
 //!   - Position 0 means the value is not in the set
@@ -81,7 +81,7 @@ pub struct Set<T>(Vec<T>);
 impl<T> Set<T> {
     /// Creates a new empty set.
     #[inline]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self(Vec::new())
     }
 
@@ -93,7 +93,7 @@ impl<T> Set<T> {
     /// Violating this breaks the position-mapping invariant in storage: two equal values would
     /// share a single position slot, causing silent data corruption on subsequent `remove()` calls.
     #[inline]
-    pub fn new_unchecked(vec: Vec<T>) -> Self {
+    pub const fn new_unchecked(vec: Vec<T>) -> Self {
         Self(vec)
     }
 }
@@ -266,7 +266,7 @@ where
 
     /// Returns the base storage slot for this set.
     #[inline]
-    pub fn base_slot(&self) -> U256 {
+    pub const fn base_slot(&self) -> U256 {
         self.base_slot
     }
 
@@ -940,7 +940,7 @@ mod tests {
                 let set = handler.read()?;
 
                 for i in 0..set.len() {
-                    prop_assert_eq!(set.get(i).cloned(), handler.at(i)?, "Order mismatch at index {}", i);
+                    prop_assert_eq!(set.get(i).copied(), handler.at(i)?, "Order mismatch at index {}", i);
                 }
 
                 Ok(())

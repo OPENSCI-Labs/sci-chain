@@ -56,7 +56,6 @@ impl HashMapStorageProvider {
             events: HashMap::new(),
             snapshots: Vec::new(),
             chain_id,
-            #[expect(clippy::disallowed_methods)]
             timestamp: U256::from(
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -74,13 +73,13 @@ impl HashMapStorageProvider {
     }
 
     /// Returns self with the hardfork spec overridden (builder pattern).
-    pub fn with_spec(mut self, spec: TempoHardfork) -> Self {
+    pub const fn with_spec(mut self, spec: TempoHardfork) -> Self {
         self.spec = spec;
         self
     }
 
     /// Returns self with `amsterdam_eip8037_enabled` overridden (builder pattern).
-    pub fn with_amsterdam_eip8037_enabled(mut self, enabled: bool) -> Self {
+    pub const fn with_amsterdam_eip8037_enabled(mut self, enabled: bool) -> Self {
         self.amsterdam_eip8037_enabled = enabled;
         self
     }
@@ -235,7 +234,7 @@ impl PrecompileStorageProvider for HashMapStorageProvider {
 
 #[cfg(any(test, feature = "test-utils"))]
 impl HashMapStorageProvider {
-    pub fn fail_next_sload_at(&mut self, address: Address, slot: U256) {
+    pub const fn fail_next_sload_at(&mut self, address: Address, slot: U256) {
         self.fail_on_sload = Some((address, slot));
     }
 
@@ -257,22 +256,22 @@ impl HashMapStorageProvider {
     }
 
     /// Overrides the block timestamp.
-    pub fn set_timestamp(&mut self, timestamp: U256) {
+    pub const fn set_timestamp(&mut self, timestamp: U256) {
         self.timestamp = timestamp;
     }
 
     /// Overrides the block beneficiary (coinbase).
-    pub fn set_beneficiary(&mut self, beneficiary: Address) {
+    pub const fn set_beneficiary(&mut self, beneficiary: Address) {
         self.beneficiary = beneficiary;
     }
 
     /// Overrides the block number.
-    pub fn set_block_number(&mut self, block_number: u64) {
+    pub const fn set_block_number(&mut self, block_number: u64) {
         self.block_number = block_number;
     }
 
     /// Overrides the active hardfork spec.
-    pub fn set_spec(&mut self, spec: TempoHardfork) {
+    pub const fn set_spec(&mut self, spec: TempoHardfork) {
         self.spec = spec;
     }
 
@@ -287,17 +286,17 @@ impl HashMapStorageProvider {
     }
 
     /// Returns the amount of counted SLOADs.
-    pub fn counter_sload(&self) -> u64 {
+    pub const fn counter_sload(&self) -> u64 {
         self.counter_sload
     }
 
     /// Returns the amount of counted SSTOREs.
-    pub fn counter_sstore(&self) -> u64 {
+    pub const fn counter_sstore(&self) -> u64 {
         self.counter_sstore
     }
 
     /// Resets the SLOAD and SSTORE counters.
-    pub fn reset_counters(&mut self) {
+    pub const fn reset_counters(&mut self) {
         self.counter_sload = 0;
         self.counter_sstore = 0;
     }

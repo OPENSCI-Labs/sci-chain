@@ -6,7 +6,9 @@ use alloy_primitives::{Address, U256};
 use revm::interpreter::instructions::utility::{IntoAddress, IntoU256};
 use tempo_precompiles_macros;
 
-use crate::storage::types::*;
+use crate::storage::types::{
+    FromWord, Layout, LayoutCtx, Packable, Slot, StorableType, StorageKey,
+};
 
 // rust integers: (u)int8, (u)int16, (u)int32, (u)int64, (u)int128
 tempo_precompiles_macros::storable_rust_ints!();

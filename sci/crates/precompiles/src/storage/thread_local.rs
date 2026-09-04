@@ -51,8 +51,8 @@ impl StorageCtx {
     where
         S: PrecompileStorageProvider,
     {
-        // SAFETY: `scoped_tls` ensures the pointer is only accessible within the closure scope.
         let storage: &mut dyn PrecompileStorageProvider = storage;
+        // SAFETY: `scoped_tls` ensures the pointer is only accessible within the closure scope.
         let storage_static: &mut (dyn PrecompileStorageProvider + 'static) =
             unsafe { std::mem::transmute(storage) };
         let cell = RefCell::new(storage_static);
@@ -480,6 +480,7 @@ impl StorageCtx {
 /// SAFETY: the caller must ensure the reference remains valid for the extended lifetime.
 #[cfg(any(test, feature = "test-utils"))]
 unsafe fn extend_lifetime_mut<'b, T: ?Sized>(r: &mut T) -> &'b mut T {
+    // SAFETY: the caller guarantees the reference remains valid for the extended lifetime.
     unsafe { &mut *(r as *mut T) }
 }
 

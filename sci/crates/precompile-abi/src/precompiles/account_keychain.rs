@@ -11,7 +11,7 @@ crate::sol! {
     /// Account Keychain interface for managing authorized keys
     ///
     /// This precompile allows accounts to authorize secondary keys with:
-    /// - Different signature types (secp256k1, P256, WebAuthn)
+    /// - Different signature types (secp256k1, P256, `WebAuthn`)
     /// - Expiry times for key rotation
     /// - Per-token spending limits for security
     ///
@@ -21,8 +21,11 @@ crate::sol! {
     #[sol(abi)]
     interface IAccountKeychain {
         enum SignatureType {
+            /// secp256k1 ECDSA signature.
             Secp256k1,
+            /// P-256 (secp256r1) ECDSA signature.
             P256,
+            /// `WebAuthn` / passkey signature.
             WebAuthn,
         }
 
@@ -109,7 +112,7 @@ crate::sol! {
 
         /// Authorize a new key for the caller's account with T3 extensions.
         /// @param keyId The key identifier (address derived from public key)
-        /// @param signatureType 0: secp256k1, 1: P256, 2: WebAuthn
+        /// @param signatureType 0: secp256k1, 1: P256, 2: `WebAuthn`
         /// @param config Access-key expiry and optional limits / call restrictions
         function authorizeKey(
             address keyId,
@@ -326,7 +329,7 @@ impl AccountKeychainError {
 // snake_case helpers), so they're omitted here.
 impl AccountKeychainEvent {
     /// Constructs the `KeyAuthorized` event.
-    pub fn key_authorized(
+    pub const fn key_authorized(
         account: alloy_primitives::Address,
         public_key: alloy_primitives::Address,
         signature_type: u8,
@@ -341,7 +344,7 @@ impl AccountKeychainEvent {
     }
 
     /// Constructs the `KeyRevoked` event.
-    pub fn key_revoked(
+    pub const fn key_revoked(
         account: alloy_primitives::Address,
         public_key: alloy_primitives::Address,
     ) -> Self {
@@ -349,7 +352,7 @@ impl AccountKeychainEvent {
     }
 
     /// Constructs the `SpendingLimitUpdated` event.
-    pub fn spending_limit_updated(
+    pub const fn spending_limit_updated(
         account: alloy_primitives::Address,
         public_key: alloy_primitives::Address,
         token: alloy_primitives::Address,
@@ -364,7 +367,7 @@ impl AccountKeychainEvent {
     }
 
     /// Constructs the `AccessKeySpend` event.
-    pub fn access_key_spend(
+    pub const fn access_key_spend(
         account: alloy_primitives::Address,
         public_key: alloy_primitives::Address,
         token: alloy_primitives::Address,

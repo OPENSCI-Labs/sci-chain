@@ -17,7 +17,10 @@ use alloy_primitives::{Address, Bytes, U256, keccak256};
 
 use crate::{
     error::{Result, TempoPrecompileError},
-    storage::{StorageCtx, StorageOps, types::*},
+    storage::{
+        StorageCtx, StorageOps,
+        types::{Handler, Layout, LayoutCtx, Slot, Storable, StorableType},
+    },
 };
 
 impl StorableType for Bytes {
@@ -53,12 +56,12 @@ pub struct BytesLikeHandler<T> {
 impl<T: Storable> BytesLikeHandler<T> {
     /// Creates a new handler for the bytes-like value at the given base slot.
     #[inline]
-    pub fn new(base_slot: U256, address: Address) -> Self {
+    pub const fn new(base_slot: U256, address: Address) -> Self {
         Self { base_slot, address, _ty: PhantomData }
     }
 
     #[inline]
-    fn as_slot(&self) -> Slot<T> {
+    const fn as_slot(&self) -> Slot<T> {
         Slot::new(self.base_slot, self.address)
     }
 
@@ -288,7 +291,7 @@ fn calc_data_slot(base_slot: U256) -> U256 {
 /// - Bit 0 = 0: Short string (≤31 bytes)
 /// - Bit 0 = 1: Long string (≥32 bytes)
 #[inline]
-fn is_long_string(slot_value: U256) -> bool {
+const fn is_long_string(slot_value: U256) -> bool {
     (slot_value.byte(0) & 1) != 0
 }
 
@@ -324,7 +327,7 @@ fn calc_string_length(slot_value: U256, is_long: bool) -> Result<usize> {
 
 /// Compute the number of 32-byte chunks needed to store a byte string.
 #[inline]
-fn calc_chunks(byte_length: usize) -> usize {
+const fn calc_chunks(byte_length: usize) -> usize {
     byte_length.div_ceil(32)
 }
 
