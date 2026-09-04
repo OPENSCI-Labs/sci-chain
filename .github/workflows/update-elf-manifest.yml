@@ -1,0 +1,55 @@
+name: Update SP1 ELF Manifest
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Branch to rebuild ELFs and update manifest.toml on'
+        required: true
+        default: 'main'
+
+permissions:
+  contents: write
+
+jobs:
+  update-manifest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.inputs.branch }}
+          submodules: recursive
+
+      - name: Install just
+        run: |
+          if ! command -v just >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | bash -s -- --to "$HOME/.local/bin"
+            echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          fi
+
+      - name: Install SP1 toolchain (cargo-prove)
+        env:
+          SP1_VERSION: v6.1.0
+        run: |
+          curl -L https://sp1up.succinct.xyz | bash
+          "$HOME/.sp1/bin/sp1up" --version "$SP1_VERSION"
+          echo "$HOME/.sp1/bin" >> "$GITHUB_PATH"
+
+      - name: Build SP1 ELFs
+        run: just succinct build-elfs
+
+      - name: Regenerate manifest
+        run: just succinct write-manifest
+
+      - name: Commit and push manifest
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/proof/succinct/elf/manifest.toml
+          if git diff --cached --quiet; then
+            echo "manifest.toml unchanged — nothing to commit"
+          else
+            git commit -m "chore: update SP1 ELF manifest"
+            git push origin "HEAD:${{ github.event.inputs.branch }}"
+          fi
