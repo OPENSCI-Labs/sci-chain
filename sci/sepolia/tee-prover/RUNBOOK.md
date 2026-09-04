@@ -15,8 +15,8 @@ were prepared and compile-verified locally on 2026-06-24; see
 | Item | Value |
 |---|---|
 | Deployer / DGF owner / SystemConfig guardian+owner | `0xd339ffBf98D9f56Fb391f9130986DC5B8a2c282e` (verified on-chain) |
-| Live DisputeGameFactory | `0x69A8E8137D8F5a35Ba0670192738816C3031Ec52` |
-| Live AnchorStateRegistry | `0x38eE07A983F73BC2ad116b6295E46A5ddC675695` |
+| Live DisputeGameFactory | `0x94fC1366051124abd364A4E32D6E11Bb23D1e95B` (authoritative redeploy) |
+| Live AnchorStateRegistry | `0xd8a8b53F3C6B6AC51E977Fe5D67Ed1E9C346F45c` (authoritative redeploy) |
 | Game type | 621 |
 | Init bond | 0.001 ETH |
 | Block interval / intermediate | 600 / 30 |
@@ -26,6 +26,12 @@ were prepared and compile-verified locally on 2026-06-24; see
 | teeChallenger | `0xFF6E90Ed75e1c3142c55Ef35687191a26DD1e6A5` |
 | DelayedWETH | MockDelayedWETH (shadow; swap to real before flipping respectedGameType) |
 | Cost | ~0.05–0.2 Sepolia ETH |
+
+> **DGF/ASR addresses corrected 2026-07-02.** Earlier revisions of this table listed the
+> *reused* DGF `0x69A8E8137D8F5a35Ba0670192738816C3031Ec52` / ASR
+> `0x38eE07A983F73BC2ad116b6295E46A5ddC675695` from the abandoned shadow-on-live-DGF
+> attempt. Those are stale — the authoritative pair is the redeploy above (DGF `0x94fC13…`
+> / ASR `0xd8a8b5…`), matching `sci-tee-prover-challenger-deploy-plan.md` §2.
 
 ## Prerequisites (on host)
 
@@ -117,9 +123,14 @@ automation. Today `respectedGameType = 1` (permissioned, unaffected). Flip only 
 
 Gates (in dependency order):
 
-- [ ] **G1 — type-621 games resolve correctly (primary gate).** A sustained observation
+- [~] **G1 — type-621 games resolve correctly (primary gate).** A sustained observation
       window: the proposer keeps creating games, each clears finality
       (`disputeGameFinalityDelaySeconds`) and resolves with no unexpected challenge.
+      *(2026-07-02: `base-challenger` live since 2026-07-01 09:35 UTC; resolve loop PROVEN
+      — real `resolve` + `claimCredit` txs confirmed on-chain, e.g. games `0x34Dc16…` /
+      `0x73559f…`. Anchor advance still pending: no game past the 3.5-day finality gate yet;
+      idx0 `0x329F0B…` (DEFENDER_WINS, resolvedAt 1782874368) finalizes ~2026-07-04 and the
+      challenger will then auto-`setAnchorState()`. Verify anchor rises above block 0 then.)*
 - [ ] **G2 — real DelayedWETH.** Replace `MockDelayedWETH` (shadow) with a real
       DelayedWETH and rebind the AggregateVerifier.
 - [ ] **G3 — ZK challenge leg wired.** Currently TEE-only dev bypass (`DevTEEProverRegistry`
@@ -128,8 +139,12 @@ Gates (in dependency order):
 - [ ] **G4 — real Nitro attestation.** Replace dev-bypass signer registration
       (`addDevSigner`) with real AWS Nitro attestation-based registration (PCR0 verified
       via `NitroEnclaveVerifier`).
-- [ ] **G5 — challenger funded + running.** `teeChallenger` (`0xFF6E90…`) must be funded
+- [~] **G5 — challenger funded + running.** `teeChallenger` (`0xFF6E90…`) must be funded
       and active so a respected game type has real adversarial defense (currently 0 ETH).
+      *(2026-07-02: functionally met — `sci-challenger.service` is enabled + active, but runs
+      under the deployer key `0xd339ff…` (~1.03 ETH), NOT the reserved `0xFF6E90…` (whose
+      private key is not on the host). For a literal reading of this gate, obtain the
+      `0xFF6E90…` key and switch the signer; see challenger-deploy-plan §3.)*
 - [ ] **G6 — anchor + finality params reviewed.** Confirm the ASR keeps serving a
       type-621 anchor, and `proofMaturityDelaySeconds` / `disputeGameFinalityDelaySeconds`
       are production values.
@@ -147,5 +162,8 @@ Rollback:
 - [ ] Keep a rollback ready — if the type-621 path misbehaves, Guardian calls
       `setRespectedGameType(1)` to revert to permissioned.
 
-Status (2026-06-29): G1's observation window just started (the proposer was funded and
-the L1 node fixed today after a weekend stall); G2–G5 not yet started.
+Status (2026-07-02): G1 largely met — `base-challenger` deployed 2026-07-01 and the resolve
+loop is proven on-chain; only the anchor advance remains, gated purely by the 3.5-day
+finality airgap (idx0 finalizes ~2026-07-04, challenger auto-advances the anchor then). G5
+functionally met (challenger running under the deployer key). G2 (real DelayedWETH), G3
+(ZK leg), G4 (real Nitro) not yet started.
