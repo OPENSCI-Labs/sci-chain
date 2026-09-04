@@ -83,17 +83,17 @@ pub mod gas {
         }
 
         /// No-op for SCI. Real revm 38 would deduct against the reservoir.
-        pub fn deduct_state_gas(&mut self, _amount: u64) -> Result<(), GasTrackerError> {
+        pub const fn deduct_state_gas(&mut self, _amount: u64) -> Result<(), GasTrackerError> {
             Ok(())
         }
 
         /// Records state-creating cost. SCI: always returns `true` (no enforcement).
-        pub fn record_state_cost(&mut self, _amount: u64) -> bool {
+        pub const fn record_state_cost(&mut self, _amount: u64) -> bool {
             true
         }
 
         /// Records ordinary gas cost. Returns `false` on insufficient balance.
-        pub fn record_regular_cost(&mut self, amount: u64) -> bool {
+        pub const fn record_regular_cost(&mut self, amount: u64) -> bool {
             let new_used = self.gas_used.saturating_add(amount);
             if new_used > self.gas_limit {
                 return false;
@@ -103,12 +103,12 @@ pub mod gas {
         }
 
         /// Records a gas refund.
-        pub fn record_refund(&mut self, amount: i64) {
+        pub const fn record_refund(&mut self, amount: i64) {
             self.gas_refunded = self.gas_refunded.saturating_add(amount);
         }
 
         /// Deducts ordinary gas. Returns `Err` on insufficient balance.
-        pub fn deduct_gas(&mut self, amount: u64) -> Result<(), GasTrackerError> {
+        pub const fn deduct_gas(&mut self, amount: u64) -> Result<(), GasTrackerError> {
             let new_used = self.gas_used.saturating_add(amount);
             if new_used > self.gas_limit {
                 return Err(GasTrackerError::OutOfGas);
@@ -118,7 +118,7 @@ pub mod gas {
         }
 
         /// Adds to the refund counter.
-        pub fn refund_gas(&mut self, amount: i64) {
+        pub const fn refund_gas(&mut self, amount: i64) {
             self.gas_refunded = self.gas_refunded.saturating_add(amount);
         }
     }

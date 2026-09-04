@@ -96,7 +96,7 @@ pub type PrecompileResult = Result<PrecompileOutput, PrecompileError>;
 impl PrecompileOutput {
     /// v38-shape `new(gas, bytes, reservoir)` constructor. The reservoir arg
     /// is kept for source compatibility but ignored.
-    pub fn new(gas_used: u64, bytes: Bytes, _reservoir: u64) -> Self {
+    pub const fn new(gas_used: u64, bytes: Bytes, _reservoir: u64) -> Self {
         Self {
             gas_used,
             gas_refunded: 0,
@@ -108,7 +108,7 @@ impl PrecompileOutput {
     }
 
     /// v38-shape revert constructor: `(gas, bytes, reservoir)`.
-    pub fn revert(gas_used: u64, bytes: Bytes, _reservoir: u64) -> Self {
+    pub const fn revert(gas_used: u64, bytes: Bytes, _reservoir: u64) -> Self {
         Self {
             gas_used,
             gas_refunded: 0,
@@ -121,7 +121,7 @@ impl PrecompileOutput {
 
     /// v38-shape halt constructor: `(halt, reservoir)`. The reservoir arg is
     /// kept for source compatibility but ignored.
-    pub fn halt(halt: PrecompileHalt, _reservoir: u64) -> Self {
+    pub const fn halt(halt: PrecompileHalt, _reservoir: u64) -> Self {
         Self {
             gas_used: 0,
             gas_refunded: 0,
