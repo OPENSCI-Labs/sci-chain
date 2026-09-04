@@ -20,11 +20,7 @@ use revm::{
         Block, Cfg, ContextTr, JournalTr, LocalContextTr, Transaction,
         result::{ExecutionResult, FromStringError, InvalidTransaction},
     },
-    handler::{
-        EthFrame, EvmTr, FrameResult, Handler,
-        evm::FrameTr,
-        handler::EvmTrError,
-    },
+    handler::{EthFrame, EvmTr, FrameResult, Handler, evm::FrameTr, handler::EvmTrError},
     inspector::{InspectorEvmTr, InspectorHandler},
     interpreter::{
         CallInput, CallInputs, CallScheme, CallValue, CreateInputs, CreateScheme, Gas,
@@ -35,16 +31,15 @@ use revm::{
     primitives::{TxKind, U256},
     state::EvmState,
 };
-
 use sci_precompiles::{
     AaCall, HookOutcome, apply_aa_post_execution_deductions, run_aa_keychain_hook,
     set_keychain_tx_origin,
 };
 
 use crate::{
-    L1BlockInfo, BaseHaltReason, BaseSpecId,
-    handler::{IsTxError, BaseHandler},
-    transaction::{AaTransactionParts, DEPOSIT_TRANSACTION_TYPE, BaseTransactionError, BaseTxTr},
+    BaseHaltReason, BaseSpecId, L1BlockInfo,
+    handler::{BaseHandler, IsTxError},
+    transaction::{AaTransactionParts, BaseTransactionError, BaseTxTr, DEPOSIT_TRANSACTION_TYPE},
 };
 
 /// SCI Chain handler wrapping Base's [`BaseHandler`]. See module docs.
@@ -56,9 +51,7 @@ pub struct SciHandler<EVM, ERROR, FRAME> {
 impl<EVM, ERROR, FRAME> SciHandler<EVM, ERROR, FRAME> {
     /// Creates a fresh [`SciHandler`] wrapping a fresh [`BaseHandler`].
     pub fn new() -> Self {
-        Self {
-            inner: BaseHandler::new(),
-        }
+        Self { inner: BaseHandler::new() }
     }
 
     /// Normalizes a multi-call batch's [`FrameResult`] gas to the full tx gas limit,
@@ -86,7 +79,8 @@ where
     EVM: EvmTr<
             Context: ContextTr<
                 Db: alloy_evm::Database,
-                Journal: JournalTr<State = EvmState, Database: alloy_evm::Database> + core::fmt::Debug,
+                Journal: JournalTr<State = EvmState, Database: alloy_evm::Database>
+                             + core::fmt::Debug,
                 Tx: BaseTxTr,
                 Cfg: revm::context_interface::Cfg<Spec = BaseSpecId>,
                 Chain = L1BlockInfo,
@@ -196,7 +190,8 @@ where
     EVM: EvmTr<
             Context: ContextTr<
                 Db: alloy_evm::Database,
-                Journal: JournalTr<State = EvmState, Database: alloy_evm::Database> + core::fmt::Debug,
+                Journal: JournalTr<State = EvmState, Database: alloy_evm::Database>
+                             + core::fmt::Debug,
                 Tx: BaseTxTr,
                 Cfg: revm::context_interface::Cfg<Spec = BaseSpecId>,
                 Chain = L1BlockInfo,
@@ -279,16 +274,14 @@ where
                     let additional_cost = chain.tx_cost_with_tx(tx, spec).unwrap_or(U256::ZERO);
                     max_gas.saturating_add(additional_cost)
                 };
-                let signer_before =
-                    evm.ctx().journal_mut().load_account(signer)?.data.info.balance;
+                let signer_before = evm.ctx().journal_mut().load_account(signer)?.data.info.balance;
                 if let Some(err) = evm.ctx().journal_mut().transfer(fp, signer, prefund)? {
                     return Err(ERROR::from_string(format!(
                         "fee_payer {fp:?} cannot cover gas: {err:?}"
                     )));
                 }
                 self.inner.validate_against_state_and_deduct_caller(evm)?;
-                let signer_after =
-                    evm.ctx().journal_mut().load_account(signer)?.data.info.balance;
+                let signer_after = evm.ctx().journal_mut().load_account(signer)?.data.info.balance;
                 let (from, to, amount) = if signer_after >= signer_before {
                     (signer, fp, signer_after - signer_before) // return excess to fee_payer
                 } else {
@@ -354,7 +347,11 @@ where
                     U256::ZERO
                 };
                 match run_aa_keychain_hook::<EVM, ERROR>(
-                    evm, root_addr, signer, &calls, gas_reservation,
+                    evm,
+                    root_addr,
+                    signer,
+                    &calls,
+                    gas_reservation,
                 )? {
                     HookOutcome::Pass => Ok(()),
                     HookOutcome::Reject(err) => Err(err),
@@ -492,7 +489,11 @@ where
             };
             if body_ok || !gas_deduction.is_zero() {
                 apply_aa_post_execution_deductions::<EVM, ERROR>(
-                    evm, root_addr, signer, &calls, gas_deduction,
+                    evm,
+                    root_addr,
+                    signer,
+                    &calls,
+                    gas_deduction,
                 )?;
             }
         }
@@ -513,7 +514,8 @@ where
     EVM: InspectorEvmTr<
             Context: ContextTr<
                 Db: alloy_evm::Database,
-                Journal: JournalTr<State = EvmState, Database: alloy_evm::Database> + core::fmt::Debug,
+                Journal: JournalTr<State = EvmState, Database: alloy_evm::Database>
+                             + core::fmt::Debug,
                 Tx: BaseTxTr,
                 Cfg: revm::context_interface::Cfg<Spec = BaseSpecId>,
                 Chain = L1BlockInfo,
@@ -537,9 +539,7 @@ where
         evm: &mut Self::Evm,
         init_and_floor_gas: &InitialAndFloorGas,
     ) -> Result<FrameResult, Self::Error> {
-        if let Some(aa) =
-            evm.ctx().tx().aa_parts().cloned().filter(|aa| !aa.calls.is_empty())
-        {
+        if let Some(aa) = evm.ctx().tx().aa_parts().cloned().filter(|aa| !aa.calls.is_empty()) {
             return self.execute_aa_batch(
                 evm,
                 init_and_floor_gas,
@@ -562,7 +562,7 @@ where
 mod tests {
     use base_common_chains::BaseUpgrade;
     use revm::{
-        context::{Context, CfgEnv, TxEnv},
+        context::{CfgEnv, Context, TxEnv},
         context_interface::result::EVMError,
         database::InMemoryDB,
         handler::Handler,

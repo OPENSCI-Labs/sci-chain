@@ -38,6 +38,8 @@
 //! [`AccountKeychain::get_remaining_limit_with_period`]) deliberately collapse
 //! missing/revoked/expired keys onto the same "deny-all / zero quota" return shape, so
 //! consumers should treat them uniformly rather than branching on `isRevoked`.
+use alloy_primitives::{Address, U256};
+
 use super::{AccountKeychain, AuthorizedKey};
 use crate::{
     error::Result,
@@ -46,7 +48,6 @@ use crate::{
         packing::PackedSlot,
     },
 };
-use alloy_primitives::{Address, U256};
 
 impl AccountKeychain {
     /// Computes the raw storage slot (within the keychain precompile's account storage)
@@ -141,9 +142,10 @@ impl AccountKeychain {
 
 #[cfg(test)]
 mod tests {
+    use tempo_contracts::precompiles::ACCOUNT_KEYCHAIN_ADDRESS;
+
     use super::*;
     use crate::storage::{PrecompileStorageProvider, StorageCtx, hashmap::HashMapStorageProvider};
-    use tempo_contracts::precompiles::ACCOUNT_KEYCHAIN_ADDRESS;
 
     /// Anchors the out-of-EVM slot math + word decoding (used by the txpool AA admission
     /// gate, review finding M-3) to the precompile's own storage machinery: write an

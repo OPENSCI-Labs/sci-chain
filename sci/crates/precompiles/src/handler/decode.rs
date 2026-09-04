@@ -56,12 +56,12 @@ pub fn classify_token_call(root: Address, target: Address, data: &[u8]) -> Optio
     }
 }
 
-
 #[cfg(test)]
 mod tests {
-    use super::*;
     use alloy_primitives::{Address, B256, U256};
     use alloy_sol_types::SolCall;
+
+    use super::*;
 
     const ROOT: Address = Address::repeat_byte(0x99);
 
@@ -72,8 +72,7 @@ mod tests {
         let amount = U256::from(1_000_000u64);
         let data = IERC20::transferCall { to, amount }.abi_encode();
 
-        let (out_token, out_amount) =
-            classify_token_call(ROOT, token, &data).expect("classified");
+        let (out_token, out_amount) = classify_token_call(ROOT, token, &data).expect("classified");
         assert_eq!(out_token, token);
         assert_eq!(out_amount, amount);
     }
@@ -85,8 +84,7 @@ mod tests {
         let amount = U256::from(u128::MAX);
         let data = IERC20::approveCall { spender, amount }.abi_encode();
 
-        let (out_token, out_amount) =
-            classify_token_call(ROOT, token, &data).expect("classified");
+        let (out_token, out_amount) = classify_token_call(ROOT, token, &data).expect("classified");
         assert_eq!(out_token, token);
         assert_eq!(out_amount, amount, "full approve amount, no max-min capping");
     }
@@ -99,8 +97,7 @@ mod tests {
         let memo = B256::repeat_byte(0xff);
         let data = ISCI20::transferWithMemoCall { to, amount, memo }.abi_encode();
 
-        let (out_token, out_amount) =
-            classify_token_call(ROOT, token, &data).expect("classified");
+        let (out_token, out_amount) = classify_token_call(ROOT, token, &data).expect("classified");
         assert_eq!(out_token, token);
         assert_eq!(out_amount, amount);
     }
@@ -109,12 +106,8 @@ mod tests {
     fn classify_transferfrom_from_root_is_metered() {
         let token = Address::repeat_byte(0xaa);
         let amount = U256::from(100u64);
-        let data = IERC20::transferFromCall {
-            from: ROOT,
-            to: Address::repeat_byte(0x22),
-            amount,
-        }
-        .abi_encode();
+        let data = IERC20::transferFromCall { from: ROOT, to: Address::repeat_byte(0x22), amount }
+            .abi_encode();
 
         let (out_token, out_amount) =
             classify_token_call(ROOT, token, &data).expect("from == root is metered");

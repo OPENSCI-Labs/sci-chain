@@ -54,11 +54,7 @@ impl FieldLocation {
     /// Create a new field location
     #[inline]
     pub const fn new(offset_slots: usize, offset_bytes: usize, size: usize) -> Self {
-        Self {
-            offset_slots,
-            offset_bytes,
-            size,
-        }
+        Self { offset_slots, offset_bytes, size }
     }
 }
 
@@ -68,11 +64,7 @@ impl FieldLocation {
 /// For 32-byte values, returns U256::MAX.
 #[inline]
 pub fn create_element_mask(byte_count: usize) -> U256 {
-    if byte_count >= 32 {
-        U256::MAX
-    } else {
-        (U256::ONE << (byte_count * 8)) - U256::ONE
-    }
+    if byte_count >= 32 { U256::MAX } else { (U256::ONE << (byte_count * 8)) - U256::ONE }
 }
 
 /// Extract a packed value from a storage slot at a given byte offset.
@@ -226,10 +218,7 @@ pub fn gen_word_from(values: &[&str]) -> U256 {
         let hex_str = value.strip_prefix("0x").unwrap_or(value);
 
         // Parse hex string to bytes
-        assert!(
-            hex_str.len() % 2 == 0,
-            "Hex string '{value}' has odd length"
-        );
+        assert!(hex_str.len() % 2 == 0, "Hex string '{value}' has odd length");
 
         for i in (0..hex_str.len()).step_by(2) {
             let byte_str = &hex_str[i..i + 2];
@@ -239,11 +228,7 @@ pub fn gen_word_from(values: &[&str]) -> U256 {
         }
     }
 
-    assert!(
-        bytes.len() <= 32,
-        "Total bytes ({}) exceed 32-byte slot limit",
-        bytes.len()
-    );
+    assert!(bytes.len() <= 32, "Total bytes ({}) exceed 32-byte slot limit", bytes.len());
 
     // Left-pad with zeros to 32 bytes
     let mut slot_bytes = [0u8; 32];
@@ -255,6 +240,8 @@ pub fn gen_word_from(values: &[&str]) -> U256 {
 
 #[cfg(test)]
 mod tests {
+    use alloy_primitives::Address;
+
     use super::*;
     use crate::{
         storage::{
@@ -263,7 +250,6 @@ mod tests {
         },
         test_util::{gen_word_from, setup_storage},
     };
-    use alloy_primitives::Address;
 
     // -- HELPER FUNCTION TESTS ----------------------------------------------------
 
@@ -424,33 +410,21 @@ mod tests {
         // Address (20 bytes) at offset 13 would span slot boundary (13 + 20 = 33 > 32)
         let addr = Address::random();
         let result = insert_into_word(U256::ZERO, &addr, 13, 20);
-        assert!(
-            result.is_err(),
-            "Should reject address at offset 13 (would span slot)"
-        );
+        assert!(result.is_err(), "Should reject address at offset 13 (would span slot)");
 
         // u16 (2 bytes) at offset 31 would span slot boundary (31 + 2 = 33 > 32)
         let val: u16 = 42;
         let result = insert_into_word(U256::ZERO, &val, 31, 2);
-        assert!(
-            result.is_err(),
-            "Should reject u16 at offset 31 (would span slot)"
-        );
+        assert!(result.is_err(), "Should reject u16 at offset 31 (would span slot)");
 
         // u32 (4 bytes) at offset 29 would span slot boundary (29 + 4 = 33 > 32)
         let val: u32 = 42;
         let result = insert_into_word(U256::ZERO, &val, 29, 4);
-        assert!(
-            result.is_err(),
-            "Should reject u32 at offset 29 (would span slot)"
-        );
+        assert!(result.is_err(), "Should reject u32 at offset 29 (would span slot)");
 
         // Test extract as well
         let result = extract_from_word::<Address>(U256::ZERO, 13, 20);
-        assert!(
-            result.is_err(),
-            "Should reject extracting address from offset 13"
-        );
+        assert!(result.is_err(), "Should reject extracting address from offset 13");
     }
 
     #[test]
@@ -486,10 +460,7 @@ mod tests {
         ]);
 
         let slot = insert_into_word(U256::ZERO, &true, 0, 1).unwrap();
-        assert_eq!(
-            slot, expected,
-            "Single bool [true] should match Solidity layout"
-        );
+        assert_eq!(slot, expected, "Single bool [true] should match Solidity layout");
         assert!(extract_from_word::<bool>(slot, 0, 1).unwrap());
 
         // two bools
@@ -772,10 +743,7 @@ mod tests {
         slot = insert_into_word(slot, &v3, 3, 4).unwrap();
         slot = insert_into_word(slot, &v4, 7, 8).unwrap();
 
-        assert_eq!(
-            slot, expected,
-            "Mixed types packing should match Solidity layout"
-        );
+        assert_eq!(slot, expected, "Mixed types packing should match Solidity layout");
         assert_eq!(extract_from_word::<u8>(slot, 0, 1).unwrap(), v1);
         assert_eq!(extract_from_word::<u16>(slot, 1, 2).unwrap(), v2);
         assert_eq!(extract_from_word::<u32>(slot, 3, 4).unwrap(), v3);
@@ -797,10 +765,7 @@ mod tests {
         slot = insert_into_word(slot, &true, 0, 1).unwrap();
         slot = insert_into_word(slot, &addr, 1, 20).unwrap();
         slot = insert_into_word(slot, &number, 21, 1).unwrap();
-        assert_eq!(
-            slot, expected,
-            "[bool, address, u8] should match Solidity layout"
-        );
+        assert_eq!(slot, expected, "[bool, address, u8] should match Solidity layout");
         assert!(extract_from_word::<bool>(slot, 0, 1).unwrap());
         assert_eq!(extract_from_word::<Address>(slot, 1, 20).unwrap(), addr);
         assert_eq!(extract_from_word::<u8>(slot, 21, 1).unwrap(), number);

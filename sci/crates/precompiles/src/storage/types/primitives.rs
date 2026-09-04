@@ -80,12 +80,13 @@ impl StorageKey for Address {
 
 #[cfg(test)]
 mod tests {
+    use proptest::prelude::*;
+
     use super::*;
     use crate::{
         storage::{Handler, PrecompileStorageProvider, StorageCtx},
         test_util::{gen_word_from, setup_storage},
     };
-    use proptest::prelude::*;
 
     // Strategy for generating random U256 slot values that won't overflow
     fn arb_safe_slot() -> impl Strategy<Value = U256> {
@@ -180,21 +181,12 @@ mod tests {
 
         // u64: 8 bytes, right-aligned
         assert_eq!(0u64.to_word(), gen_word_from(&["0x0000000000000000"]));
-        assert_eq!(
-            0x123456789ABCDEFu64.to_word(),
-            gen_word_from(&["0x0123456789ABCDEF"])
-        );
+        assert_eq!(0x123456789ABCDEFu64.to_word(), gen_word_from(&["0x0123456789ABCDEF"]));
         assert_eq!(u64::MAX.to_word(), gen_word_from(&["0xFFFFFFFFFFFFFFFF"]));
 
         // u128: 16 bytes, right-aligned
-        assert_eq!(
-            0u128.to_word(),
-            gen_word_from(&["0x00000000000000000000000000000000"])
-        );
-        assert_eq!(
-            u128::MAX.to_word(),
-            gen_word_from(&["0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"])
-        );
+        assert_eq!(0u128.to_word(), gen_word_from(&["0x00000000000000000000000000000000"]));
+        assert_eq!(u128::MAX.to_word(), gen_word_from(&["0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"]));
     }
 
     #[test]
@@ -230,22 +222,10 @@ mod tests {
         assert_eq!(i64::MIN.to_word(), gen_word_from(&["0x8000000000000000"]));
 
         // i128: 16 bytes, right-aligned, two's complement
-        assert_eq!(
-            0i128.to_word(),
-            gen_word_from(&["0x00000000000000000000000000000000"])
-        );
-        assert_eq!(
-            i128::MAX.to_word(),
-            gen_word_from(&["0x7FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"])
-        );
-        assert_eq!(
-            (-1i128).to_word(),
-            gen_word_from(&["0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"])
-        );
-        assert_eq!(
-            i128::MIN.to_word(),
-            gen_word_from(&["0x80000000000000000000000000000000"])
-        );
+        assert_eq!(0i128.to_word(), gen_word_from(&["0x00000000000000000000000000000000"]));
+        assert_eq!(i128::MAX.to_word(), gen_word_from(&["0x7FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"]));
+        assert_eq!((-1i128).to_word(), gen_word_from(&["0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"]));
+        assert_eq!(i128::MIN.to_word(), gen_word_from(&["0x80000000000000000000000000000000"]));
     }
 
     // -- PRIMITIVE SLOT CONTENT VALIDATION TESTS ----------------------------------
@@ -301,9 +281,7 @@ mod tests {
         assert_eq!(loaded_slot, expected);
 
         // Clear with low-level write
-        storage
-            .sstore(address, base_slot + U256::ONE, U256::ZERO)
-            .unwrap();
+        storage.sstore(address, base_slot + U256::ONE, U256::ZERO).unwrap();
 
         // Verify with Slot read
         StorageCtx::enter(&mut storage, || {
@@ -332,9 +310,7 @@ mod tests {
         assert_eq!(loaded_slot, expected);
 
         // Clear with low-level write
-        storage
-            .sstore(address, base_slot + U256::from(2), U256::ZERO)
-            .unwrap();
+        storage.sstore(address, base_slot + U256::from(2), U256::ZERO).unwrap();
 
         // Verify with Slot read
         StorageCtx::enter(&mut storage, || {
@@ -395,9 +371,7 @@ mod tests {
         assert_eq!(loaded_slot, expected);
 
         // Clear with low-level write
-        storage
-            .sstore(address, base_slot + U256::ONE, U256::ZERO)
-            .unwrap();
+        storage.sstore(address, base_slot + U256::ONE, U256::ZERO).unwrap();
 
         // Verify with Slot read
         StorageCtx::enter(&mut storage, || {
@@ -426,9 +400,7 @@ mod tests {
         assert_eq!(loaded_slot, expected);
 
         // Clear with low-level write
-        storage
-            .sstore(address, base_slot + U256::from(2), U256::ZERO)
-            .unwrap();
+        storage.sstore(address, base_slot + U256::from(2), U256::ZERO).unwrap();
 
         // Verify with Slot read
         StorageCtx::enter(&mut storage, || {
@@ -489,9 +461,7 @@ mod tests {
         assert_eq!(loaded_slot, expected);
 
         // Clear with low-level write
-        storage
-            .sstore(address, base_slot + U256::ONE, U256::ZERO)
-            .unwrap();
+        storage.sstore(address, base_slot + U256::ONE, U256::ZERO).unwrap();
 
         // Verify with Slot read
         StorageCtx::enter(&mut storage, || {
@@ -520,9 +490,7 @@ mod tests {
         assert_eq!(loaded_slot, expected);
 
         // Clear with low-level write
-        storage
-            .sstore(address, base_slot + U256::from(2), U256::ZERO)
-            .unwrap();
+        storage.sstore(address, base_slot + U256::from(2), U256::ZERO).unwrap();
 
         // Verify with Slot read
         StorageCtx::enter(&mut storage, || {
@@ -583,9 +551,7 @@ mod tests {
         assert_eq!(loaded_slot, expected);
 
         // Clear with low-level write
-        storage
-            .sstore(address, base_slot + U256::ONE, U256::ZERO)
-            .unwrap();
+        storage.sstore(address, base_slot + U256::ONE, U256::ZERO).unwrap();
 
         // Verify with Slot read
         StorageCtx::enter(&mut storage, || {
@@ -614,9 +580,7 @@ mod tests {
         assert_eq!(loaded_slot, expected);
 
         // Clear with low-level write
-        storage
-            .sstore(address, base_slot + U256::from(2), U256::ZERO)
-            .unwrap();
+        storage.sstore(address, base_slot + U256::from(2), U256::ZERO).unwrap();
 
         // Verify with Slot read
         StorageCtx::enter(&mut storage, || {
@@ -677,9 +641,7 @@ mod tests {
         assert_eq!(loaded_slot, expected);
 
         // Clear with low-level write
-        storage
-            .sstore(address, base_slot + U256::ONE, U256::ZERO)
-            .unwrap();
+        storage.sstore(address, base_slot + U256::ONE, U256::ZERO).unwrap();
 
         // Verify with Slot read
         StorageCtx::enter(&mut storage, || {
@@ -740,9 +702,7 @@ mod tests {
         assert_eq!(loaded_slot, expected);
 
         // Clear with low-level write
-        storage
-            .sstore(address, base_slot + U256::ONE, U256::ZERO)
-            .unwrap();
+        storage.sstore(address, base_slot + U256::ONE, U256::ZERO).unwrap();
 
         // Verify with Slot read
         StorageCtx::enter(&mut storage, || {
@@ -803,9 +763,7 @@ mod tests {
         assert_eq!(loaded_slot, expected);
 
         // Clear with low-level write
-        storage
-            .sstore(address, base_slot + U256::ONE, U256::ZERO)
-            .unwrap();
+        storage.sstore(address, base_slot + U256::ONE, U256::ZERO).unwrap();
 
         // Verify with Slot read
         StorageCtx::enter(&mut storage, || {
@@ -852,11 +810,7 @@ mod tests {
 
         // Verify slot is non-zero
         let slot_before = storage.sload(address, base_slot).unwrap();
-        assert_ne!(
-            slot_before,
-            U256::ZERO,
-            "Slot should be non-zero before delete"
-        );
+        assert_ne!(slot_before, U256::ZERO, "Slot should be non-zero before delete");
 
         // Delete the value
         StorageCtx::enter(&mut storage, || {

@@ -18,7 +18,6 @@
 use alloy_evm::{Evm, EvmEnv, EvmFactory};
 use alloy_primitives::{Address, Bytes, TxKind, U256, address};
 use alloy_sol_types::SolCall;
-
 use base_common_chains::BaseUpgrade;
 use base_common_consensus::Call;
 use base_common_evm::{
@@ -34,7 +33,6 @@ use revm::{
     inspector::NoOpInspector,
     state::AccountInfo,
 };
-
 use sci_precompiles::{ACCOUNT_KEYCHAIN_ADDRESS, SCI_AGENT_STATE_ADDRESS};
 use tempo_contracts::{
     precompiles::{
@@ -87,8 +85,8 @@ impl AgentFixture {
             );
         }
 
-        let cfg = CfgEnv::new_with_spec(BaseSpecId::new(BaseUpgrade::Isthmus))
-            .with_chain_id(CHAIN_ID);
+        let cfg =
+            CfgEnv::new_with_spec(BaseSpecId::new(BaseUpgrade::Isthmus)).with_chain_id(CHAIN_ID);
         let mut block = BlockEnv::default();
         block.basefee = 0; // no basefee in tests; we still pay gas_price
         let env = EvmEnv { cfg_env: cfg, block_env: block };
@@ -510,9 +508,9 @@ fn batch_partial_failure_rolls_back_whole_batch() {
             Some(root),
             None,
             vec![
-                call(bystander, 9, vec![]),                       // would succeed alone
-                call(token, 0, transfer_data(bystander, 300)),    // no-op target, fine
-                call(reverter, 0, vec![]),                        // fails → batch reverts
+                call(bystander, 9, vec![]),                    // would succeed alone
+                call(token, 0, transfer_data(bystander, 300)), // no-op target, fine
+                call(reverter, 0, vec![]),                     // fails → batch reverts
             ],
         )
         .expect("hook passes; the revert happens in the body");
@@ -559,11 +557,7 @@ fn transferfrom_from_root_counts_against_quota() {
 
     // In-quota transferFrom(root → bystander) passes and deducts.
     let result = fx
-        .send_aa_tx(
-            Some(root),
-            None,
-            vec![call(token, 0, transfer_from_data(root, bystander, 60))],
-        )
+        .send_aa_tx(Some(root), None, vec![call(token, 0, transfer_from_data(root, bystander, 60))])
         .expect("in-quota transferFrom must pass");
     assert!(result.is_success(), "{result:?}");
     assert_eq!(

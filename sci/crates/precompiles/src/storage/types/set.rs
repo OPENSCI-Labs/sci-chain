@@ -41,13 +41,14 @@
 //! handler.write(vec.into())?;  // `Set::from(vec)` deduplicates
 //! ```
 
-use alloy_primitives::{Address, U256};
 use std::{
     collections::HashSet,
     fmt,
     hash::Hash,
     ops::{Deref, Index},
 };
+
+use alloy_primitives::{Address, U256};
 
 use crate::{
     error::{Result, TempoPrecompileError},
@@ -306,9 +307,7 @@ where
 
         // Store position (1-indexed: position N means index N-1)
         let length = self.values.len()?;
-        self.positions
-            .at_mut(&value)
-            .write(checked_position(length)?)?;
+        self.positions.at_mut(&value).write(checked_position(length)?)?;
 
         // Push value to the array
         self.values.push(value)?;
@@ -429,9 +428,7 @@ where
 
         // Write new values and positions (1-indexed)
         for (index, new_value) in value.0.into_iter().enumerate() {
-            self.positions
-                .at_mut(&new_value)
-                .write(checked_position(index)?)?;
+            self.positions.at_mut(&new_value).write(checked_position(index)?)?;
             self.values[index].write(new_value)?;
         }
 
@@ -463,21 +460,15 @@ where
     }
 
     fn t_read(&self) -> Result<Set<T>> {
-        Err(TempoPrecompileError::Fatal(
-            "Set types don't support transient storage".into(),
-        ))
+        Err(TempoPrecompileError::Fatal("Set types don't support transient storage".into()))
     }
 
     fn t_write(&mut self, _value: Set<T>) -> Result<()> {
-        Err(TempoPrecompileError::Fatal(
-            "Set types don't support transient storage".into(),
-        ))
+        Err(TempoPrecompileError::Fatal("Set types don't support transient storage".into()))
     }
 
     fn t_delete(&mut self) -> Result<()> {
-        Err(TempoPrecompileError::Fatal(
-            "Set types don't support transient storage".into(),
-        ))
+        Err(TempoPrecompileError::Fatal("Set types don't support transient storage".into()))
     }
 }
 
@@ -519,10 +510,11 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::{storage::StorageCtx, test_util::setup_storage};
     use alloy_primitives::Address;
     use proptest::prelude::*;
+
+    use super::*;
+    use crate::{storage::StorageCtx, test_util::setup_storage};
 
     // -- SET TYPE TESTS -------------------------------------------------------
 
@@ -775,11 +767,7 @@ mod tests {
 
             // Write to grow (1 → 3)
             handler.insert(U256::from(1))?;
-            handler.write(Set::from(vec![
-                U256::from(10),
-                U256::from(20),
-                U256::from(30),
-            ]))?;
+            handler.write(Set::from(vec![U256::from(10), U256::from(20), U256::from(30)]))?;
             assert_eq!(handler.len()?, 3);
             assert!(!handler.contains(&U256::from(1))?);
             assert!(handler.contains(&U256::from(10))?);

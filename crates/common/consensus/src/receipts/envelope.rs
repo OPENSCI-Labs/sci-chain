@@ -80,9 +80,7 @@ impl BaseReceiptEnvelope {
             }
             // PoC: AA tx receipts are represented as EIP-1559 receipts. A dedicated AA
             // receipt type lands in Phase 1.
-            OpTxType::Aa => {
-                Self::Eip1559(ReceiptWithBloom { receipt: inner_receipt, logs_bloom })
-            }
+            OpTxType::Aa => Self::Eip1559(ReceiptWithBloom { receipt: inner_receipt, logs_bloom }),
             OpTxType::Deposit => {
                 let inner = DepositReceiptWithBloom {
                     receipt: DepositReceipt {

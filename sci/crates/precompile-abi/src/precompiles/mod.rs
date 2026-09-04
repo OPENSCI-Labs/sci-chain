@@ -14,12 +14,11 @@ mod tip20;
 pub use tip20::ITIP20;
 
 mod sci_agent_state;
+use alloy_primitives::{Address, address};
 pub use sci_agent_state::{
     AGENT_CIRCUIT_BREAKER_ADDRESS, ISciAgentState, SCI_AGENT_STATE_ADDRESS, SciAgentStateError,
     SciAgentStateEvent, isTrippedCall, tripKeyCall, untripKeyCall,
 };
-
-use alloy_primitives::{Address, address};
 
 /// AccountKeychain precompile address.
 pub const ACCOUNT_KEYCHAIN_ADDRESS: Address =

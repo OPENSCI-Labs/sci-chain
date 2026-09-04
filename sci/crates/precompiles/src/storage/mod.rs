@@ -14,16 +14,15 @@ mod types;
 pub use types::*;
 
 pub mod packing;
-pub use packing::FieldLocation;
-pub use types::mapping as slots;
-
 use alloy_primitives::{Address, B256, LogData, Signature, U256};
+pub use packing::FieldLocation;
 use revm::{
     context::journaled_state::JournalCheckpoint,
     interpreter::gas::{KECCAK256, KECCAK256WORD},
     state::{AccountInfo, Bytecode},
 };
 use tempo_chainspec::hardfork::TempoHardfork;
+pub use types::mapping as slots;
 
 use crate::error::{Result, TempoPrecompileError};
 
@@ -186,7 +185,6 @@ pub trait ContractStorage {
 
     /// Returns true if the contract has been initialized (has bytecode deployed).
     fn is_initialized(&self) -> Result<bool> {
-        self.storage()
-            .with_account_info(self.address(), |info| Ok(!info.is_empty_code_hash()))
+        self.storage().with_account_info(self.address(), |info| Ok(!info.is_empty_code_hash()))
     }
 }

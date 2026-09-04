@@ -851,9 +851,8 @@ pub(super) mod serde_bincode_compat {
                 root: Some(alloy_primitives::Address::repeat_byte(0x99)),
             };
             let sig = Signature::new(U256::from(1u64), U256::from(2u64), false);
-            let data = Data {
-                envelope: super::super::BaseTxEnvelope::Aa(Signed::new_unhashed(aa, sig)),
-            };
+            let data =
+                Data { envelope: super::super::BaseTxEnvelope::Aa(Signed::new_unhashed(aa, sig)) };
 
             let encoded = bincode::serde::encode_to_vec(&data, bincode::config::legacy()).unwrap();
             let (decoded, _) =

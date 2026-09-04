@@ -17,6 +17,7 @@ mod sci_ext;
 
 use std::collections::HashSet;
 
+use alloy_primitives::{Address, B256, FixedBytes, TxKind, U256, keccak256};
 use alloy_sol_types::SolCall;
 use tempo_contracts::precompiles::{AccountKeychainError, AccountKeychainEvent, ITIP20};
 pub use tempo_contracts::precompiles::{
@@ -30,6 +31,8 @@ pub use tempo_contracts::precompiles::{
     },
     authorizeKeyCall, authorizeKeyWithWitnessCall, getAllowedCallsReturn, getRemainingLimitReturn,
 };
+use tempo_precompiles_macros::{Storable, contract};
+
 // SCI-only divergence from upstream Tempo: SCI does not ship the TIP-20 factory
 // precompile (Tempo's `tempo_primitives::TempoAddressExt` and
 // `tip20_factory::TIP20Factory` paths don't exist in this fork). The
@@ -38,14 +41,11 @@ pub use tempo_contracts::precompiles::{
 // restrictions still apply to any selector matching the standard ERC-20
 // `transfer` / `approve` / `transferWithMemo` selectors — that's the gating
 // SCI wants.
-
 use crate::{
     ACCOUNT_KEYCHAIN_ADDRESS,
     error::Result,
     storage::{Handler, Mapping, Set},
 };
-use alloy_primitives::{Address, B256, FixedBytes, TxKind, U256, keccak256};
-use tempo_precompiles_macros::{Storable, contract};
 
 /// Allowed TIP-20 selectors for recipient-constrained rules.
 const TIP20_TRANSFER_SELECTOR: [u8; 4] = ITIP20::transferCall::SELECTOR;
@@ -166,10 +166,7 @@ impl SpendingLimitState {
     /// Computes the period end for the current rollover window, saturating on
     /// all intermediate operations to avoid overflow in extreme timestamps.
     fn compute_next_period_end(&self, current_timestamp: u64) -> u64 {
-        debug_assert!(
-            self.period != 0,
-            "period rollovers require a non-zero period"
-        );
+        debug_assert!(self.period != 0, "period rollovers require a non-zero period");
         let elapsed = current_timestamp.saturating_sub(self.period_end);
         let periods_elapsed = (elapsed / self.period).saturating_add(1);
         let advance = self.period.saturating_mul(periods_elapsed);
@@ -269,11 +266,7 @@ impl AccountKeychain {
                 }
             }
 
-            if config.allowAnyCalls {
-                None
-            } else {
-                Some(config.allowedCalls.as_slice())
-            }
+            if config.allowAnyCalls { None } else { Some(config.allowedCalls.as_slice()) }
         } else {
             if config.limits.iter().any(|limit| limit.period != 0) {
                 return Err(AccountKeychainError::invalid_spending_limit().into());
@@ -300,11 +293,7 @@ impl AccountKeychain {
 
         self.keys[msg_sender][key_id].write(new_key)?;
 
-        let limits = config
-            .enforceLimits
-            .then_some(config.limits.iter())
-            .into_iter()
-            .flatten();
+        let limits = config.enforceLimits.then_some(config.limits.iter()).into_iter().flatten();
 
         self.apply_key_authorization_restrictions(
             msg_sender,
@@ -315,10 +304,7 @@ impl AccountKeychain {
 
         if let Some(witness) = witness {
             self.emit_event(AccountKeychainEvent::KeyAuthorizationWitness(
-                IAccountKeychain::KeyAuthorizationWitness {
-                    account: msg_sender,
-                    witness,
-                },
+                IAccountKeychain::KeyAuthorizationWitness { account: msg_sender, witness },
             ))?;
         }
 
@@ -363,10 +349,7 @@ impl AccountKeychain {
         // Mark the key as revoked - this prevents replay attacks by ensuring
         // the same key_id can never be re-authorized for this account.
         // We keep is_revoked=true but clear other fields.
-        let revoked_key = AuthorizedKey {
-            is_revoked: true,
-            ..Default::default()
-        };
+        let revoked_key = AuthorizedKey { is_revoked: true, ..Default::default() };
         self.keys[msg_sender][call.keyId].write(revoked_key)?;
 
         // Note: We don't clear spending limits here - they become inaccessible
@@ -410,9 +393,7 @@ impl AccountKeychain {
             limit_state.max = Self::t3_spending_limit_cap(call.newLimit)?;
             self.spending_limits[limit_key][call.token].write(limit_state)?;
         } else {
-            self.spending_limits[limit_key][call.token]
-                .remaining
-                .write(call.newLimit)?;
+            self.spending_limits[limit_key][call.token].remaining.write(call.newLimit)?;
         }
 
         // Emit event
@@ -488,10 +469,7 @@ impl AccountKeychain {
             self.storage.timestamp().saturating_to::<u64>(),
         )?;
 
-        Ok(getRemainingLimitReturn {
-            remaining,
-            periodEnd: period_end,
-        })
+        Ok(getRemainingLimitReturn { remaining, periodEnd: period_end })
     }
 
     /// Root-only create-or-replace updates for one or more target call scopes.
@@ -554,43 +532,29 @@ impl AccountKeychain {
     /// keys also report scoped deny-all so this getter never exposes stale persisted scope state.
     pub fn get_allowed_calls(&self, call: getAllowedCallsCall) -> Result<getAllowedCallsReturn> {
         if call.keyId.is_zero() {
-            return Ok(getAllowedCallsReturn {
-                isScoped: false,
-                scopes: Vec::new(),
-            });
+            return Ok(getAllowedCallsReturn { isScoped: false, scopes: Vec::new() });
         }
 
         let current_timestamp = self.storage.timestamp().saturating_to::<u64>();
         let key = self.keys[call.account][call.keyId].read()?;
         if key.expiry == 0 || key.is_revoked || current_timestamp >= key.expiry {
-            return Ok(getAllowedCallsReturn {
-                isScoped: true,
-                scopes: Vec::new(),
-            });
+            return Ok(getAllowedCallsReturn { isScoped: true, scopes: Vec::new() });
         }
 
         let key_hash = Self::spending_limit_key(call.account, call.keyId);
         let is_scoped = self.key_scopes[key_hash].is_scoped.read()?;
 
         if !is_scoped {
-            return Ok(getAllowedCallsReturn {
-                isScoped: false,
-                scopes: Vec::new(),
-            });
+            return Ok(getAllowedCallsReturn { isScoped: false, scopes: Vec::new() });
         }
 
         let targets = self.key_scopes[key_hash].targets.read()?;
         let mut scopes = Vec::new();
         for target in targets {
-            let selectors = self.key_scopes[key_hash].target_scopes[target]
-                .selectors
-                .read()?;
+            let selectors = self.key_scopes[key_hash].target_scopes[target].selectors.read()?;
 
             let scope = if selectors.is_empty() {
-                CallScope {
-                    target,
-                    selectorRules: Vec::new(),
-                }
+                CallScope { target, selectorRules: Vec::new() }
             } else {
                 let mut rules = Vec::new();
 
@@ -601,25 +565,16 @@ impl AccountKeychain {
                         .read()?
                         .into();
 
-                    rules.push(SelectorRule {
-                        selector,
-                        recipients,
-                    });
+                    rules.push(SelectorRule { selector, recipients });
                 }
 
-                CallScope {
-                    target,
-                    selectorRules: rules,
-                }
+                CallScope { target, selectorRules: rules }
             };
 
             scopes.push(scope);
         }
 
-        Ok(getAllowedCallsReturn {
-            isScoped: true,
-            scopes,
-        })
+        Ok(getAllowedCallsReturn { isScoped: true, scopes })
     }
 
     /// Returns whether a TIP-1053 key-authorization witness has been manually burned.
@@ -680,11 +635,8 @@ impl AccountKeychain {
         let now = self.storage.timestamp().saturating_to::<u64>();
         for limit in limits {
             if is_t3 {
-                let period_end = if limit.period == 0 {
-                    0
-                } else {
-                    now.saturating_add(limit.period)
-                };
+                let period_end =
+                    if limit.period == 0 { 0 } else { now.saturating_add(limit.period) };
 
                 self.spending_limits[limit_key][limit.token].write(SpendingLimitState {
                     remaining: limit.amount,
@@ -693,9 +645,7 @@ impl AccountKeychain {
                     period_end,
                 })?;
             } else {
-                self.spending_limits[limit_key][limit.token]
-                    .remaining
-                    .write(limit.amount)?;
+                self.spending_limits[limit_key][limit.token].remaining.write(limit.amount)?;
             }
         }
 
@@ -743,9 +693,8 @@ impl AccountKeychain {
 
         // Empty child sets mean "no further restriction" once the parent target was explicitly
         // allowed, so a present target with `selectors = []` allows any selector.
-        let target_is_unconstrained = self.key_scopes[key_hash].target_scopes[target]
-            .selectors
-            .is_empty()?;
+        let target_is_unconstrained =
+            self.key_scopes[key_hash].target_scopes[target].selectors.is_empty()?;
         if target_is_unconstrained {
             return Ok(());
         }
@@ -758,10 +707,7 @@ impl AccountKeychain {
         let selector = FixedBytes::<4>::from(
             <[u8; 4]>::try_from(&input[..4]).expect("input len checked above"),
         );
-        if !self.key_scopes[key_hash].target_scopes[target]
-            .selectors
-            .contains(&selector)?
-        {
+        if !self.key_scopes[key_hash].target_scopes[target].selectors.contains(&selector)? {
             return Err(AccountKeychainError::call_not_allowed().into());
         }
 
@@ -856,18 +802,14 @@ impl AccountKeychain {
 
     /// Clears every selector scope stored under one target.
     fn clear_target_selectors(&mut self, account_key: B256, target: Address) -> Result<()> {
-        let selectors = self.key_scopes[account_key].target_scopes[target]
-            .selectors
-            .read()?;
+        let selectors = self.key_scopes[account_key].target_scopes[target].selectors.read()?;
         for selector in selectors {
             self.key_scopes[account_key].target_scopes[target].selector_scopes[selector]
                 .recipients
                 .delete()?;
         }
 
-        self.key_scopes[account_key].target_scopes[target]
-            .selectors
-            .delete()
+        self.key_scopes[account_key].target_scopes[target].selectors.delete()
     }
 
     /// Creates or replaces one target scope, including all nested selector rules.
@@ -891,9 +833,7 @@ impl AccountKeychain {
 
         for rule in &scope.selectorRules {
             let selector = rule.selector;
-            self.key_scopes[account_key].target_scopes[target]
-                .selectors
-                .insert(selector)?;
+            self.key_scopes[account_key].target_scopes[target].selectors.insert(selector)?;
 
             if rule.recipients.is_empty() {
                 if !self.storage.spec().is_t4() {
@@ -1220,9 +1160,7 @@ impl AccountKeychain {
             }
 
             let new_remaining = remaining - amount;
-            self.spending_limits[limit_key][token]
-                .remaining
-                .write(new_remaining)?;
+            self.spending_limits[limit_key][token].remaining.write(new_remaining)?;
             return Ok(());
         }
 
@@ -1248,9 +1186,7 @@ impl AccountKeychain {
             limit_state.remaining = new_remaining;
             self.spending_limits[limit_key][token].write(limit_state)?;
         } else {
-            self.spending_limits[limit_key][token]
-                .remaining
-                .write(new_remaining)?;
+            self.spending_limits[limit_key][token].remaining.write(new_remaining)?;
         }
 
         self.emit_event(AccountKeychainEvent::access_key_spend(
@@ -1304,9 +1240,7 @@ impl AccountKeychain {
         if !self.storage.spec().is_t3() {
             let remaining = self.spending_limits[limit_key][token].remaining.read()?;
             let refunded = remaining.saturating_add(amount);
-            return self.spending_limits[limit_key][token]
-                .remaining
-                .write(refunded);
+            return self.spending_limits[limit_key][token].remaining.write(refunded);
         }
 
         let mut limit_state = self.spending_limits[limit_key][token].read()?;
@@ -1314,11 +1248,8 @@ impl AccountKeychain {
         // Legacy pre-T3 rows only persisted `remaining`, so migrated keys deserialize with
         // `max = 0`. Preserve that legacy behavior and only clamp rows that were configured
         // with a real T3 max.
-        limit_state.remaining = if limit_state.max == 0 {
-            refunded
-        } else {
-            refunded.min(U256::from(limit_state.max))
-        };
+        limit_state.remaining =
+            if limit_state.max == 0 { refunded } else { refunded.min(U256::from(limit_state.max)) };
 
         self.spending_limits[limit_key][token].write(limit_state)
     }
@@ -1405,16 +1336,17 @@ impl AccountKeychain {
 
 #[cfg(test)]
 mod tests {
+    use alloy_primitives::{Address, B256, TxKind, U256};
+    use revm::state::Bytecode;
+    use tempo_chainspec::hardfork::TempoHardfork;
+    use tempo_contracts::precompiles::{DEFAULT_FEE_TOKEN, IAccountKeychain::SignatureType};
+
     use super::*;
     use crate::{
         error::TempoPrecompileError,
         storage::{StorageCtx, hashmap::HashMapStorageProvider},
         test_util::TIP20Setup,
     };
-    use alloy_primitives::{Address, B256, TxKind, U256};
-    use revm::state::Bytecode;
-    use tempo_chainspec::hardfork::TempoHardfork;
-    use tempo_contracts::precompiles::{DEFAULT_FEE_TOKEN, IAccountKeychain::SignatureType};
 
     fn authorize_key(
         keychain: &mut AccountKeychain,
@@ -1626,11 +1558,7 @@ mod tests {
 
             // Test 1: Initially transaction key should be zero
             let initial_key = keychain.transaction_key.t_read()?;
-            assert_eq!(
-                initial_key,
-                Address::ZERO,
-                "Initial transaction key should be zero"
-            );
+            assert_eq!(initial_key, Address::ZERO, "Initial transaction key should be zero");
 
             // Test 2: Set transaction key to an access key address
             keychain.set_transaction_key(access_key_addr)?;
@@ -1642,19 +1570,12 @@ mod tests {
             // Test 4: Verify getTransactionKey works
             let get_tx_key_call = getTransactionKeyCall {};
             let result = keychain.get_transaction_key(get_tx_key_call, Address::ZERO)?;
-            assert_eq!(
-                result, access_key_addr,
-                "getTransactionKey should return the set key"
-            );
+            assert_eq!(result, access_key_addr, "getTransactionKey should return the set key");
 
             // Test 5: Clear transaction key
             keychain.set_transaction_key(Address::ZERO)?;
             let cleared_key = keychain.transaction_key.t_read()?;
-            assert_eq!(
-                cleared_key,
-                Address::ZERO,
-                "Transaction key should be cleared"
-            );
+            assert_eq!(cleared_key, Address::ZERO, "Transaction key should be cleared");
 
             Ok(())
         })
@@ -1704,29 +1625,18 @@ mod tests {
                 },
             };
             let auth_result = authorize_key(&mut keychain, msg_sender, auth_call);
-            assert!(
-                auth_result.is_err(),
-                "authorize_key should fail when using access key"
-            );
+            assert!(auth_result.is_err(), "authorize_key should fail when using access key");
             assert_unauthorized_error(auth_result.unwrap_err());
 
             // Test 2: revoke_key should fail with access key
-            let revoke_call = revokeKeyCall {
-                keyId: existing_key,
-            };
+            let revoke_call = revokeKeyCall { keyId: existing_key };
             let revoke_result = keychain.revoke_key(msg_sender, revoke_call);
-            assert!(
-                revoke_result.is_err(),
-                "revoke_key should fail when using access key"
-            );
+            assert!(revoke_result.is_err(), "revoke_key should fail when using access key");
             assert_unauthorized_error(revoke_result.unwrap_err());
 
             // Test 3: update_spending_limit should fail with access key
-            let update_call = updateSpendingLimitCall {
-                keyId: existing_key,
-                token,
-                newLimit: U256::from(1000),
-            };
+            let update_call =
+                updateSpendingLimitCall { keyId: existing_key, token, newLimit: U256::from(1000) };
             let update_result = keychain.update_spending_limit(msg_sender, update_call);
             assert!(
                 update_result.is_err(),
@@ -1796,22 +1706,14 @@ mod tests {
             assert!(auth_result.is_err());
             assert_unauthorized_error(auth_result.unwrap_err());
 
-            let revoke_result = keychain.revoke_key(
-                delegated_sender,
-                revokeKeyCall {
-                    keyId: existing_key,
-                },
-            );
+            let revoke_result =
+                keychain.revoke_key(delegated_sender, revokeKeyCall { keyId: existing_key });
             assert!(revoke_result.is_err());
             assert_unauthorized_error(revoke_result.unwrap_err());
 
             let update_result = keychain.update_spending_limit(
                 delegated_sender,
-                updateSpendingLimitCall {
-                    keyId: existing_key,
-                    token,
-                    newLimit: U256::from(1000),
-                },
+                updateSpendingLimitCall { keyId: existing_key, token, newLimit: U256::from(1000) },
             );
             assert!(update_result.is_err());
             assert_unauthorized_error(update_result.unwrap_err());
@@ -1849,11 +1751,7 @@ mod tests {
                     config: KeyRestrictions {
                         expiry: u64::MAX,
                         enforceLimits: true,
-                        limits: vec![TokenLimit {
-                            token,
-                            amount: U256::from(100),
-                            period: 0,
-                        }],
+                        limits: vec![TokenLimit { token, amount: U256::from(100), period: 0 }],
                         allowAnyCalls: true,
                         allowedCalls: vec![],
                     },
@@ -1862,11 +1760,7 @@ mod tests {
 
             keychain.update_spending_limit(
                 contract_sender,
-                updateSpendingLimitCall {
-                    keyId: key_id,
-                    token,
-                    newLimit: U256::from(200),
-                },
+                updateSpendingLimitCall { keyId: key_id, token, newLimit: U256::from(200) },
             )?;
 
             assert_eq!(
@@ -1880,10 +1774,8 @@ mod tests {
 
             keychain.revoke_key(contract_sender, revokeKeyCall { keyId: key_id })?;
 
-            let key_info = keychain.get_key(getKeyCall {
-                account: contract_sender,
-                keyId: key_id,
-            })?;
+            let key_info =
+                keychain.get_key(getKeyCall { account: contract_sender, keyId: key_id })?;
             assert!(key_info.isRevoked);
 
             Ok(())
@@ -1915,11 +1807,7 @@ mod tests {
                     config: KeyRestrictions {
                         expiry: u64::MAX,
                         enforceLimits: true,
-                        limits: vec![TokenLimit {
-                            token,
-                            amount: U256::from(100),
-                            period: 0,
-                        }],
+                        limits: vec![TokenLimit { token, amount: U256::from(100), period: 0 }],
                         allowAnyCalls: true,
                         allowedCalls: vec![],
                     },
@@ -1928,19 +1816,12 @@ mod tests {
 
             keychain.update_spending_limit(
                 msg_sender,
-                updateSpendingLimitCall {
-                    keyId: key_id,
-                    token,
-                    newLimit: U256::from(200),
-                },
+                updateSpendingLimitCall { keyId: key_id, token, newLimit: U256::from(200) },
             )?;
 
             keychain.revoke_key(msg_sender, revokeKeyCall { keyId: key_id })?;
 
-            let key_info = keychain.get_key(getKeyCall {
-                account: msg_sender,
-                keyId: key_id,
-            })?;
+            let key_info = keychain.get_key(getKeyCall { account: msg_sender, keyId: key_id })?;
             assert!(key_info.isRevoked);
 
             Ok(())
@@ -1971,11 +1852,7 @@ mod tests {
                     config: KeyRestrictions {
                         expiry: u64::MAX,
                         enforceLimits: true,
-                        limits: vec![TokenLimit {
-                            token,
-                            amount: U256::from(100),
-                            period: 0,
-                        }],
+                        limits: vec![TokenLimit { token, amount: U256::from(100), period: 0 }],
                         allowAnyCalls: true,
                         allowedCalls: vec![],
                     },
@@ -1986,11 +1863,7 @@ mod tests {
             keychain.set_tx_origin(other_origin)?;
             let result = keychain.update_spending_limit(
                 account,
-                updateSpendingLimitCall {
-                    keyId: key_id,
-                    token,
-                    newLimit: U256::from(200),
-                },
+                updateSpendingLimitCall { keyId: key_id, token, newLimit: U256::from(200) },
             );
             assert!(result.is_err());
             assert_unauthorized_error(result.unwrap_err());
@@ -2026,11 +1899,7 @@ mod tests {
                     config: KeyRestrictions {
                         expiry: u64::MAX,
                         enforceLimits: true,
-                        limits: vec![TokenLimit {
-                            token,
-                            amount: U256::from(100),
-                            period: 0,
-                        }],
+                        limits: vec![TokenLimit { token, amount: U256::from(100), period: 0 }],
                         allowAnyCalls: true,
                         allowedCalls: vec![],
                     },
@@ -2074,11 +1943,7 @@ mod tests {
             // update_spending_limit must reject
             let update_result = keychain.update_spending_limit(
                 account,
-                updateSpendingLimitCall {
-                    keyId: key_id,
-                    token,
-                    newLimit: U256::from(200),
-                },
+                updateSpendingLimitCall { keyId: key_id, token, newLimit: U256::from(200) },
             );
             assert!(
                 update_result.is_err(),
@@ -2111,11 +1976,7 @@ mod tests {
                 config: KeyRestrictions {
                     expiry: u64::MAX,
                     enforceLimits: true,
-                    limits: vec![TokenLimit {
-                        token,
-                        amount: U256::from(100),
-                        period: 0,
-                    }],
+                    limits: vec![TokenLimit { token, amount: U256::from(100), period: 0 }],
                     allowAnyCalls: true,
                     allowedCalls: vec![],
                 },
@@ -2123,10 +1984,7 @@ mod tests {
             authorize_key(&mut keychain, account, auth_call.clone())?;
 
             // Verify key exists and limit is set
-            let key_info = keychain.get_key(getKeyCall {
-                account,
-                keyId: key_id,
-            })?;
+            let key_info = keychain.get_key(getKeyCall { account, keyId: key_id })?;
             assert_eq!(key_info.expiry, u64::MAX);
             assert!(!key_info.isRevoked);
             assert_eq!(
@@ -2143,10 +2001,7 @@ mod tests {
             keychain.revoke_key(account, revoke_call)?;
 
             // Verify key is revoked and remaining limit returns 0
-            let key_info = keychain.get_key(getKeyCall {
-                account,
-                keyId: key_id,
-            })?;
+            let key_info = keychain.get_key(getKeyCall { account, keyId: key_id })?;
             assert_eq!(key_info.expiry, 0);
             assert!(key_info.isRevoked);
             assert_eq!(
@@ -2161,10 +2016,7 @@ mod tests {
             // Step 3: Try to re-authorize the same key (replay attack)
             // This should fail because the key was revoked
             let replay_result = authorize_key(&mut keychain, account, auth_call);
-            assert!(
-                replay_result.is_err(),
-                "Re-authorizing a revoked key should fail"
-            );
+            assert!(replay_result.is_err(), "Re-authorizing a revoked key should fail");
 
             // Verify it's the correct error
             match replay_result.unwrap_err() {
@@ -2206,10 +2058,7 @@ mod tests {
                 },
             };
             let result = authorize_key(&mut keychain, account, auth_call);
-            assert!(
-                result.is_err(),
-                "Authorizing with expiry in past should fail"
-            );
+            assert!(result.is_err(), "Authorizing with expiry in past should fail");
 
             // Verify it's the correct error
             match result.unwrap_err() {
@@ -2270,11 +2119,7 @@ mod tests {
                     config: KeyRestrictions {
                         expiry: u64::MAX,
                         enforceLimits: true,
-                        limits: vec![TokenLimit {
-                            token,
-                            amount: U256::from(100u64),
-                            period: 60,
-                        }],
+                        limits: vec![TokenLimit { token, amount: U256::from(100u64), period: 60 }],
                         allowAnyCalls: true,
                         allowedCalls: vec![],
                     },
@@ -2353,10 +2198,7 @@ mod tests {
             authorize_key(&mut keychain, account, auth_call_2)?;
 
             // Verify key 2 is authorized
-            let key_info = keychain.get_key(getKeyCall {
-                account,
-                keyId: key_id_2,
-            })?;
+            let key_info = keychain.get_key(getKeyCall { account, keyId: key_id_2 })?;
             assert_eq!(key_info.expiry, u64::MAX);
             assert!(!key_info.isRevoked);
 
@@ -2387,11 +2229,7 @@ mod tests {
                 config: KeyRestrictions {
                     expiry: u64::MAX,
                     enforceLimits: true,
-                    limits: vec![TokenLimit {
-                        token,
-                        amount: U256::from(100),
-                        period: 0,
-                    }],
+                    limits: vec![TokenLimit { token, amount: U256::from(100), period: 0 }],
                     allowAnyCalls: true,
                     allowedCalls: vec![],
                 },
@@ -2504,11 +2342,7 @@ mod tests {
                 config: KeyRestrictions {
                     expiry: u64::MAX,
                     enforceLimits: true,
-                    limits: vec![TokenLimit {
-                        token,
-                        amount: U256::from(100),
-                        period: 0,
-                    }],
+                    limits: vec![TokenLimit { token, amount: U256::from(100), period: 0 }],
                     allowAnyCalls: true,
                     allowedCalls: vec![],
                 },
@@ -2521,11 +2355,7 @@ mod tests {
                 keyId: access_key,
                 token,
             })?;
-            assert_eq!(
-                limit,
-                U256::from(100),
-                "Initial spending limit should be 100"
-            );
+            assert_eq!(limit, U256::from(100), "Initial spending limit should be 100");
 
             // Now simulate a transaction where Alice uses her access key
             keychain.set_transaction_key(access_key)?;
@@ -2620,10 +2450,7 @@ mod tests {
             authorize_key(&mut keychain, account, auth_call.clone())?;
 
             // Verify key exists with expiry = 1
-            let key_info = keychain.get_key(getKeyCall {
-                account,
-                keyId: key_id,
-            })?;
+            let key_info = keychain.get_key(getKeyCall { account, keyId: key_id })?;
             assert_eq!(key_info.expiry, 1, "Key should have expiry = 1");
 
             // Try to re-authorize - should fail because expiry > 0
@@ -2657,25 +2484,16 @@ mod tests {
 
         // Different accounts should produce different hashes
         let hash2 = AccountKeychain::spending_limit_key(account2, key_id1);
-        assert_ne!(
-            hash1a, hash2,
-            "Different accounts must produce different hashes"
-        );
+        assert_ne!(hash1a, hash2, "Different accounts must produce different hashes");
 
         // Different key_ids should produce different hashes
         let hash3 = AccountKeychain::spending_limit_key(account1, key_id2);
-        assert_ne!(
-            hash1a, hash3,
-            "Different key_ids must produce different hashes"
-        );
+        assert_ne!(hash1a, hash3, "Different key_ids must produce different hashes");
 
         // Order matters: (account1, key_id2) != (key_id2, account1) if we swap
         // But since the types are the same, let's verify swapping produces different result
         let hash_swapped = AccountKeychain::spending_limit_key(key_id1, account1);
-        assert_ne!(
-            hash1a, hash_swapped,
-            "Swapped order must produce different hash"
-        );
+        assert_ne!(hash1a, hash_swapped, "Swapped order must produce different hash");
 
         // Verify hash is not default/zero
         assert_ne!(hash1a, B256::ZERO, "Hash should not be zero");
@@ -2710,10 +2528,7 @@ mod tests {
             authorize_key(&mut keychain, account, auth_call)?;
 
             // Verify key was stored
-            let key_info = keychain.get_key(getKeyCall {
-                account,
-                keyId: key_id,
-            })?;
+            let key_info = keychain.get_key(getKeyCall { account, keyId: key_id })?;
             assert_eq!(key_info.expiry, u64::MAX, "Key should be stored after init");
 
             Ok(())
@@ -2745,10 +2560,7 @@ mod tests {
             authorize_key(&mut keychain, account, auth_call)?;
 
             // Verify key was stored with WebAuthn type (value = 2)
-            let key_info = keychain.get_key(getKeyCall {
-                account,
-                keyId: key_id,
-            })?;
+            let key_info = keychain.get_key(getKeyCall { account, keyId: key_id })?;
             assert_eq!(
                 key_info.signatureType,
                 SignatureType::WebAuthn,
@@ -2757,10 +2569,7 @@ mod tests {
 
             // Verify via validation that signature type 2 is accepted
             let result = keychain.validate_keychain_authorization(account, key_id, 0, Some(2));
-            assert!(
-                result.is_ok(),
-                "WebAuthn (type 2) validation should succeed"
-            );
+            assert!(result.is_ok(), "WebAuthn (type 2) validation should succeed");
 
             // Verify signature type mismatch is rejected
             let mismatch = keychain.validate_keychain_authorization(account, key_id, 0, Some(0));
@@ -2788,11 +2597,7 @@ mod tests {
                 config: KeyRestrictions {
                     expiry: u64::MAX,
                     enforceLimits: true,
-                    limits: vec![TokenLimit {
-                        token,
-                        amount: U256::from(100),
-                        period: 0,
-                    }],
+                    limits: vec![TokenLimit { token, amount: U256::from(100), period: 0 }],
                     allowAnyCalls: true,
                     allowedCalls: vec![],
                 },
@@ -2800,16 +2605,10 @@ mod tests {
             authorize_key(&mut keychain, account, auth_call)?;
 
             // Update should work when key is not expired
-            let update_call = updateSpendingLimitCall {
-                keyId: key_id,
-                token,
-                newLimit: U256::from(200),
-            };
+            let update_call =
+                updateSpendingLimitCall { keyId: key_id, token, newLimit: U256::from(200) };
             let result = keychain.update_spending_limit(account, update_call);
-            assert!(
-                result.is_ok(),
-                "Update should succeed when key not expired: {result:?}"
-            );
+            assert!(result.is_ok(), "Update should succeed when key not expired: {result:?}");
 
             // Verify the limit was updated
             let limit = keychain.get_remaining_limit(getRemainingLimitCall {
@@ -2849,32 +2648,17 @@ mod tests {
             authorize_key(&mut keychain, account, auth_call)?;
 
             // Verify key has enforce_limits = false
-            let key_before = keychain.get_key(getKeyCall {
-                account,
-                keyId: key_id,
-            })?;
-            assert!(
-                !key_before.enforceLimits,
-                "Key should start with enforce_limits=false"
-            );
+            let key_before = keychain.get_key(getKeyCall { account, keyId: key_id })?;
+            assert!(!key_before.enforceLimits, "Key should start with enforce_limits=false");
 
             // Update spending limit - this should toggle enforce_limits to true
-            let update_call = updateSpendingLimitCall {
-                keyId: key_id,
-                token,
-                newLimit: U256::from(500),
-            };
+            let update_call =
+                updateSpendingLimitCall { keyId: key_id, token, newLimit: U256::from(500) };
             keychain.update_spending_limit(account, update_call)?;
 
             // Verify enforce_limits is now true
-            let key_after = keychain.get_key(getKeyCall {
-                account,
-                keyId: key_id,
-            })?;
-            assert!(
-                key_after.enforceLimits,
-                "enforce_limits should be true after update"
-            );
+            let key_after = keychain.get_key(getKeyCall { account, keyId: key_id })?;
+            assert!(key_after.enforceLimits, "enforce_limits should be true after update");
 
             // Verify the spending limit was set
             let limit = keychain.get_remaining_limit(getRemainingLimitCall {
@@ -2913,12 +2697,7 @@ mod tests {
                 },
             };
             authorize_key(&mut keychain, account, auth_call)?;
-            keychain.revoke_key(
-                account,
-                revokeKeyCall {
-                    keyId: key_id_revoked,
-                },
-            )?;
+            keychain.revoke_key(account, revokeKeyCall { keyId: key_id_revoked })?;
 
             // Setup: Create a valid key
             let auth_valid = authorizeKeyCall {
@@ -2935,49 +2714,24 @@ mod tests {
             authorize_key(&mut keychain, account, auth_valid)?;
 
             // Test 1: Revoked key (expiry=0, is_revoked=true) - should return empty with isRevoked=true
-            let revoked_info = keychain.get_key(getKeyCall {
-                account,
-                keyId: key_id_revoked,
-            })?;
-            assert_eq!(
-                revoked_info.keyId,
-                Address::ZERO,
-                "Revoked key should return zero keyId"
-            );
-            assert!(
-                revoked_info.isRevoked,
-                "Revoked key should have isRevoked=true"
-            );
+            let revoked_info = keychain.get_key(getKeyCall { account, keyId: key_id_revoked })?;
+            assert_eq!(revoked_info.keyId, Address::ZERO, "Revoked key should return zero keyId");
+            assert!(revoked_info.isRevoked, "Revoked key should have isRevoked=true");
 
             // Test 2: Never existed key (expiry=0, is_revoked=false) - should return empty
-            let never_info = keychain.get_key(getKeyCall {
-                account,
-                keyId: key_id_never_existed,
-            })?;
+            let never_info =
+                keychain.get_key(getKeyCall { account, keyId: key_id_never_existed })?;
             assert_eq!(
                 never_info.keyId,
                 Address::ZERO,
                 "Non-existent key should return zero keyId"
             );
-            assert_eq!(
-                never_info.expiry, 0,
-                "Non-existent key should have expiry=0"
-            );
+            assert_eq!(never_info.expiry, 0, "Non-existent key should have expiry=0");
 
             // Test 3: Valid key (expiry>0, is_revoked=false) - should return actual key info
-            let valid_info = keychain.get_key(getKeyCall {
-                account,
-                keyId: key_id_valid,
-            })?;
-            assert_eq!(
-                valid_info.keyId, key_id_valid,
-                "Valid key should return actual keyId"
-            );
-            assert_eq!(
-                valid_info.expiry,
-                u64::MAX,
-                "Valid key should have correct expiry"
-            );
+            let valid_info = keychain.get_key(getKeyCall { account, keyId: key_id_valid })?;
+            assert_eq!(valid_info.keyId, key_id_valid, "Valid key should return actual keyId");
+            assert_eq!(valid_info.expiry, u64::MAX, "Valid key should have correct expiry");
             assert!(!valid_info.isRevoked, "Valid key should not be revoked");
 
             Ok(())
@@ -3046,30 +2800,17 @@ mod tests {
             )?;
 
             // Verify each key returns the correct signature type
-            let secp_info = keychain.get_key(getKeyCall {
-                account,
-                keyId: key_secp,
-            })?;
+            let secp_info = keychain.get_key(getKeyCall { account, keyId: key_secp })?;
             assert_eq!(
                 secp_info.signatureType,
                 SignatureType::Secp256k1,
                 "Secp256k1 key should return Secp256k1"
             );
 
-            let p256_info = keychain.get_key(getKeyCall {
-                account,
-                keyId: key_p256,
-            })?;
-            assert_eq!(
-                p256_info.signatureType,
-                SignatureType::P256,
-                "P256 key should return P256"
-            );
+            let p256_info = keychain.get_key(getKeyCall { account, keyId: key_p256 })?;
+            assert_eq!(p256_info.signatureType, SignatureType::P256, "P256 key should return P256");
 
-            let webauthn_info = keychain.get_key(getKeyCall {
-                account,
-                keyId: key_webauthn,
-            })?;
+            let webauthn_info = keychain.get_key(getKeyCall { account, keyId: key_webauthn })?;
             assert_eq!(
                 webauthn_info.signatureType,
                 SignatureType::WebAuthn,
@@ -3113,10 +2854,7 @@ mod tests {
 
             // Test 1: Validation should succeed with matching signature type (P256 = 1)
             let result = keychain.validate_keychain_authorization(account, key_id, 0, Some(1));
-            assert!(
-                result.is_ok(),
-                "Validation should succeed with matching signature type"
-            );
+            assert!(result.is_ok(), "Validation should succeed with matching signature type");
 
             // Test 2: Validation should fail with mismatched signature type (Secp256k1 = 0)
             let mismatch_result =
@@ -3173,11 +2911,7 @@ mod tests {
                 config: KeyRestrictions {
                     expiry: u64::MAX,
                     enforceLimits: true,
-                    limits: vec![TokenLimit {
-                        token,
-                        amount: U256::from(100),
-                        period: 0,
-                    }],
+                    limits: vec![TokenLimit { token, amount: U256::from(100), period: 0 }],
                     allowAnyCalls: true,
                     allowedCalls: vec![],
                 },
@@ -3248,11 +2982,7 @@ mod tests {
                 config: KeyRestrictions {
                     expiry: u64::MAX,
                     enforceLimits: true,
-                    limits: vec![TokenLimit {
-                        token,
-                        amount: U256::from(100),
-                        period: 0,
-                    }],
+                    limits: vec![TokenLimit { token, amount: U256::from(100), period: 0 }],
                     allowAnyCalls: true,
                     allowedCalls: vec![],
                 },
@@ -3314,11 +3044,7 @@ mod tests {
                 config: KeyRestrictions {
                     expiry: 200,
                     enforceLimits: true,
-                    limits: vec![TokenLimit {
-                        token,
-                        amount: U256::from(100),
-                        period: 0,
-                    }],
+                    limits: vec![TokenLimit { token, amount: U256::from(100), period: 0 }],
                     allowAnyCalls: true,
                     allowedCalls: vec![],
                 },
@@ -3375,11 +3101,7 @@ mod tests {
                 config: KeyRestrictions {
                     expiry: u64::MAX,
                     enforceLimits: true,
-                    limits: vec![TokenLimit {
-                        token,
-                        amount: U256::from(100),
-                        period: 0,
-                    }],
+                    limits: vec![TokenLimit { token, amount: U256::from(100), period: 0 }],
                     allowAnyCalls: true,
                     allowedCalls: vec![],
                 },
@@ -3400,9 +3122,7 @@ mod tests {
             keychain.set_transaction_key(access_key)?;
             keychain.set_tx_origin(eoa)?;
 
-            let err = keychain
-                .refund_spending_limit(eoa, token, U256::from(25))
-                .unwrap_err();
+            let err = keychain.refund_spending_limit(eoa, token, U256::from(25)).unwrap_err();
 
             assert!(matches!(err, TempoPrecompileError::Fatal(_)));
 
@@ -3430,11 +3150,7 @@ mod tests {
                 config: KeyRestrictions {
                     expiry: u64::MAX,
                     enforceLimits: true,
-                    limits: vec![TokenLimit {
-                        token,
-                        amount: original_limit,
-                        period: 0,
-                    }],
+                    limits: vec![TokenLimit { token, amount: original_limit, period: 0 }],
                     allowAnyCalls: true,
                     allowedCalls: vec![],
                 },
@@ -3491,11 +3207,7 @@ mod tests {
                 config: KeyRestrictions {
                     expiry: u64::MAX,
                     enforceLimits: true,
-                    limits: vec![TokenLimit {
-                        token,
-                        amount: original_limit,
-                        period: 0,
-                    }],
+                    limits: vec![TokenLimit { token, amount: original_limit, period: 0 }],
                     allowAnyCalls: true,
                     allowedCalls: vec![],
                 },
@@ -3601,11 +3313,7 @@ mod tests {
                     config: KeyRestrictions {
                         expiry: u64::MAX,
                         enforceLimits: false,
-                        limits: vec![TokenLimit {
-                            token,
-                            amount: U256::from(100),
-                            period: 60,
-                        }],
+                        limits: vec![TokenLimit { token, amount: U256::from(100), period: 60 }],
                         allowAnyCalls: true,
                         allowedCalls: vec![],
                     },
@@ -3655,11 +3363,7 @@ mod tests {
                     config: KeyRestrictions {
                         expiry: u64::MAX,
                         enforceLimits: true,
-                        limits: vec![TokenLimit {
-                            token,
-                            amount: oversized_limit,
-                            period: 60,
-                        }],
+                        limits: vec![TokenLimit { token, amount: oversized_limit, period: 60 }],
                         allowAnyCalls: true,
                         allowedCalls: vec![],
                     },
@@ -3685,11 +3389,7 @@ mod tests {
                     config: KeyRestrictions {
                         expiry: u64::MAX,
                         enforceLimits: true,
-                        limits: vec![TokenLimit {
-                            token,
-                            amount: U256::from(100u64),
-                            period: 60,
-                        }],
+                        limits: vec![TokenLimit { token, amount: U256::from(100u64), period: 60 }],
                         allowAnyCalls: true,
                         allowedCalls: vec![],
                     },
@@ -3698,11 +3398,7 @@ mod tests {
 
             let update_result = keychain.update_spending_limit(
                 account,
-                updateSpendingLimitCall {
-                    keyId: valid_key_id,
-                    token,
-                    newLimit: oversized_limit,
-                },
+                updateSpendingLimitCall { keyId: valid_key_id, token, newLimit: oversized_limit },
             );
 
             assert!(
@@ -3742,16 +3438,8 @@ mod tests {
                         expiry: u64::MAX,
                         enforceLimits: true,
                         limits: vec![
-                            TokenLimit {
-                                token,
-                                amount: U256::from(100_u64),
-                                period: 0,
-                            },
-                            TokenLimit {
-                                token,
-                                amount: U256::from(200_u64),
-                                period: 60,
-                            },
+                            TokenLimit { token, amount: U256::from(100_u64), period: 0 },
+                            TokenLimit { token, amount: U256::from(200_u64), period: 60 },
                         ],
                         allowAnyCalls: true,
                         allowedCalls: vec![],
@@ -3770,10 +3458,7 @@ mod tests {
             );
 
             let stored_key = keychain.keys[account][key_id].read()?;
-            assert_eq!(
-                stored_key.expiry, 0,
-                "duplicate rejection must not persist the key"
-            );
+            assert_eq!(stored_key.expiry, 0, "duplicate rejection must not persist the key");
 
             Ok(())
         })
@@ -3900,11 +3585,7 @@ mod tests {
                     config: KeyRestrictions {
                         expiry: u64::MAX,
                         enforceLimits: true,
-                        limits: vec![TokenLimit {
-                            token,
-                            amount: U256::from(100),
-                            period: 0,
-                        }],
+                        limits: vec![TokenLimit { token, amount: U256::from(100), period: 0 }],
                         allowAnyCalls: true,
                         allowedCalls: vec![],
                     },
@@ -3914,11 +3595,7 @@ mod tests {
             keychain.apply_key_authorization_restrictions(
                 account,
                 key_id,
-                &[TokenLimit {
-                    token,
-                    amount: U256::from(100),
-                    period: 60,
-                }],
+                &[TokenLimit { token, amount: U256::from(100), period: 60 }],
                 None,
             )?;
 
@@ -3981,19 +3658,15 @@ mod tests {
                 },
             )?;
 
-            let scopes = keychain.get_allowed_calls(getAllowedCallsCall {
-                account,
-                keyId: key_id,
-            })?;
+            let scopes =
+                keychain.get_allowed_calls(getAllowedCallsCall { account, keyId: key_id })?;
             assert!(!scopes.isScoped);
             assert!(scopes.scopes.is_empty());
 
             keychain.apply_key_authorization_restrictions(account, key_id, &[], Some(&[]))?;
 
-            let deny_all = keychain.get_allowed_calls(getAllowedCallsCall {
-                account,
-                keyId: key_id,
-            })?;
+            let deny_all =
+                keychain.get_allowed_calls(getAllowedCallsCall { account, keyId: key_id })?;
             assert!(deny_all.isScoped);
             assert!(deny_all.scopes.is_empty());
 
@@ -4028,10 +3701,7 @@ mod tests {
                             enforceLimits: false,
                             limits: vec![],
                             allowAnyCalls: false,
-                            allowedCalls: vec![CallScope {
-                                target,
-                                selectorRules: vec![],
-                            }],
+                            allowedCalls: vec![CallScope { target, selectorRules: vec![] }],
                         },
                     },
                 )?;
@@ -4039,17 +3709,13 @@ mod tests {
 
             keychain.revoke_key(account, revokeKeyCall { keyId: revoked_key })?;
 
-            let revoked = keychain.get_allowed_calls(getAllowedCallsCall {
-                account,
-                keyId: revoked_key,
-            })?;
+            let revoked =
+                keychain.get_allowed_calls(getAllowedCallsCall { account, keyId: revoked_key })?;
             assert!(revoked.isScoped);
             assert!(revoked.scopes.is_empty());
 
-            let root = keychain.get_allowed_calls(getAllowedCallsCall {
-                account,
-                keyId: Address::ZERO,
-            })?;
+            let root = keychain
+                .get_allowed_calls(getAllowedCallsCall { account, keyId: Address::ZERO })?;
             assert!(!root.isScoped);
             assert!(root.scopes.is_empty());
 
@@ -4060,10 +3726,8 @@ mod tests {
         StorageCtx::enter(&mut storage, || {
             let keychain = AccountKeychain::new();
 
-            let expired = keychain.get_allowed_calls(getAllowedCallsCall {
-                account,
-                keyId: expiring_key,
-            })?;
+            let expired =
+                keychain.get_allowed_calls(getAllowedCallsCall { account, keyId: expiring_key })?;
             assert!(expired.isScoped);
             assert!(expired.scopes.is_empty());
 
@@ -4119,11 +3783,7 @@ mod tests {
                 if hardfork.is_t3() {
                     // T3: expired keys are zeroed out
                     let remaining = keychain.get_remaining_limit_with_period(
-                        getRemainingLimitWithPeriodCall {
-                            account,
-                            keyId: key_id,
-                            token,
-                        },
+                        getRemainingLimitWithPeriodCall { account, keyId: key_id, token },
                     )?;
                     assert_eq!(remaining.remaining, U256::ZERO);
                     assert_eq!(remaining.periodEnd, 0);
@@ -4192,11 +3852,7 @@ mod tests {
                 if hardfork.is_t2() {
                     // T2+: revoked keys are zeroed out
                     let remaining = keychain.get_remaining_limit_with_period(
-                        getRemainingLimitWithPeriodCall {
-                            account,
-                            keyId: key_id,
-                            token,
-                        },
+                        getRemainingLimitWithPeriodCall { account, keyId: key_id, token },
                     )?;
                     assert_eq!(remaining.remaining, U256::ZERO);
                     assert_eq!(remaining.periodEnd, 0);
@@ -4289,10 +3945,7 @@ mod tests {
                     account,
                     setAllowedCallsCall {
                         keyId: key_id,
-                        scopes: vec![CallScope {
-                            target: Address::ZERO,
-                            selectorRules: vec![],
-                        }],
+                        scopes: vec![CallScope { target: Address::ZERO, selectorRules: vec![] }],
                     },
                 )
                 .expect_err("unexpected success for zero target scope");
@@ -4331,20 +3984,12 @@ mod tests {
             )?;
 
             let err = keychain
-                .set_allowed_calls(
-                    account,
-                    setAllowedCallsCall {
-                        keyId: key_id,
-                        scopes: vec![],
-                    },
-                )
+                .set_allowed_calls(account, setAllowedCallsCall { keyId: key_id, scopes: vec![] })
                 .expect_err("unexpected success for empty scope batch");
             assert_invalid_call_scope(err);
 
-            let scopes = keychain.get_allowed_calls(getAllowedCallsCall {
-                account,
-                keyId: key_id,
-            })?;
+            let scopes =
+                keychain.get_allowed_calls(getAllowedCallsCall { account, keyId: key_id })?;
             assert!(!scopes.isScoped);
             assert!(scopes.scopes.is_empty());
 
@@ -4395,18 +4040,13 @@ mod tests {
                 },
             )?;
 
-            let scopes = keychain.get_allowed_calls(getAllowedCallsCall {
-                account,
-                keyId: key_id,
-            })?;
+            let scopes =
+                keychain.get_allowed_calls(getAllowedCallsCall { account, keyId: key_id })?;
             assert!(scopes.isScoped);
             assert_eq!(scopes.scopes.len(), 1);
             assert_eq!(scopes.scopes[0].target, target);
             assert_eq!(scopes.scopes[0].selectorRules.len(), 1);
-            assert_eq!(
-                *scopes.scopes[0].selectorRules[0].selector,
-                TIP20_TRANSFER_SELECTOR
-            );
+            assert_eq!(*scopes.scopes[0].selectorRules[0].selector, TIP20_TRANSFER_SELECTOR);
             assert!(scopes.scopes[0].selectorRules[0].recipients.is_empty());
 
             let allow = keychain.validate_call_scope_for_transaction(
@@ -4417,18 +4057,11 @@ mod tests {
             );
             assert!(allow.is_ok());
 
-            keychain.remove_allowed_calls(
-                account,
-                removeAllowedCallsCall {
-                    keyId: key_id,
-                    target,
-                },
-            )?;
+            keychain
+                .remove_allowed_calls(account, removeAllowedCallsCall { keyId: key_id, target })?;
 
-            let removed = keychain.get_allowed_calls(getAllowedCallsCall {
-                account,
-                keyId: key_id,
-            })?;
+            let removed =
+                keychain.get_allowed_calls(getAllowedCallsCall { account, keyId: key_id })?;
             assert!(removed.isScoped);
             assert!(removed.scopes.is_empty());
 
@@ -4479,17 +4112,12 @@ mod tests {
                 account,
                 setAllowedCallsCall {
                     keyId: key_id,
-                    scopes: vec![CallScope {
-                        target,
-                        selectorRules: vec![],
-                    }],
+                    scopes: vec![CallScope { target, selectorRules: vec![] }],
                 },
             )?;
 
-            let scopes = keychain.get_allowed_calls(getAllowedCallsCall {
-                account,
-                keyId: key_id,
-            })?;
+            let scopes =
+                keychain.get_allowed_calls(getAllowedCallsCall { account, keyId: key_id })?;
             assert!(scopes.isScoped);
             assert_eq!(scopes.scopes.len(), 1);
             assert_eq!(scopes.scopes[0].target, target);
@@ -4516,10 +4144,9 @@ mod tests {
         let mut t3_sstores = 0;
         let mut t4_sstores = 0;
 
-        for (hardfork, writes) in [
-            (TempoHardfork::T3, &mut t3_sstores),
-            (TempoHardfork::T4, &mut t4_sstores),
-        ] {
+        for (hardfork, writes) in
+            [(TempoHardfork::T3, &mut t3_sstores), (TempoHardfork::T4, &mut t4_sstores)]
+        {
             let mut storage = HashMapStorageProvider::new_with_spec(1, hardfork);
             StorageCtx::enter(&mut storage, || {
                 let mut keychain = AccountKeychain::new();
@@ -4559,10 +4186,8 @@ mod tests {
                 )?;
                 *writes = StorageCtx.counter_sstore() - before;
 
-                let scopes = keychain.get_allowed_calls(getAllowedCallsCall {
-                    account,
-                    keyId: key_id,
-                })?;
+                let scopes =
+                    keychain.get_allowed_calls(getAllowedCallsCall { account, keyId: key_id })?;
                 assert!(scopes.isScoped);
                 assert_eq!(scopes.scopes.len(), 1);
                 assert!(scopes.scopes[0].selectorRules[0].recipients.is_empty());

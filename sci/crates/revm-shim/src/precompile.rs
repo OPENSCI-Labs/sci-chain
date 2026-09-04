@@ -8,15 +8,14 @@
 //! trailing `reservoir` parameter.
 
 use alloy_primitives::Bytes;
-
 // Re-export the non-shadowed surface of revm 34's `precompile` module
 // verbatim. Tempo verbatim source paths like `revm::precompile::PrecompileError`
 // or `revm::precompile::PrecompileId` resolve through here.
 pub use revm::precompile::{
-    blake2, bls12_381, bls12_381_const, bls12_381_utils, bn254, calc_linear_cost, crypto, hash,
-    identity, install_crypto, interface, kzg_point_evaluation, modexp, secp256k1, secp256r1,
-    utilities, Crypto, DefaultCrypto, Precompile, PrecompileError, PrecompileFn, PrecompileId,
-    PrecompileSpecId, Precompiles,
+    Crypto, DefaultCrypto, Precompile, PrecompileError, PrecompileFn, PrecompileId,
+    PrecompileSpecId, Precompiles, blake2, bls12_381, bls12_381_const, bls12_381_utils, bn254,
+    calc_linear_cost, crypto, hash, identity, install_crypto, interface, kzg_point_evaluation,
+    modexp, secp256k1, secp256r1, utilities,
 };
 
 /// SCI shim newtype mirroring revm 38's `PrecompileOutput` shape.
@@ -181,8 +180,9 @@ pub fn to_revm34(out: PrecompileResult) -> revm::precompile::PrecompileResult {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use alloy_primitives::Bytes;
+
+    use super::*;
 
     #[test]
     fn new_constructor_ignores_reservoir() {
@@ -217,10 +217,7 @@ mod tests {
 
     #[test]
     fn to_revm34_other_halt_becomes_err_other() {
-        let shim = Ok(PrecompileOutput::halt(
-            PrecompileHalt::Other("boom".to_string()),
-            0,
-        ));
+        let shim = Ok(PrecompileOutput::halt(PrecompileHalt::Other("boom".to_string()), 0));
         let revm = to_revm34(shim);
         match revm {
             Err(PrecompileError::Other(msg)) => assert_eq!(msg, "boom"),
@@ -230,11 +227,7 @@ mod tests {
 
     #[test]
     fn to_revm34_revert_preserves_bytes_and_gas() {
-        let shim = Ok(PrecompileOutput::revert(
-            42,
-            Bytes::from_static(&[0xDE, 0xAD]),
-            0,
-        ));
+        let shim = Ok(PrecompileOutput::revert(42, Bytes::from_static(&[0xDE, 0xAD]), 0));
         let revm = to_revm34(shim).unwrap();
         assert!(revm.reverted);
         assert_eq!(revm.gas_used, 42);
@@ -243,11 +236,7 @@ mod tests {
 
     #[test]
     fn to_revm34_success_preserves_bytes_and_gas() {
-        let shim = Ok(PrecompileOutput::new(
-            7,
-            Bytes::from_static(&[0xBE, 0xEF]),
-            0,
-        ));
+        let shim = Ok(PrecompileOutput::new(7, Bytes::from_static(&[0xBE, 0xEF]), 0));
         let revm = to_revm34(shim).unwrap();
         assert!(!revm.reverted);
         assert_eq!(revm.gas_used, 7);

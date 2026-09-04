@@ -24,12 +24,13 @@ use base_proof_succinct_proof_utils::{
 use base_proof_succinct_prove::execute_multi;
 use base_proof_succinct_scripts::HostExecutorArgs;
 use clap::Parser;
-use sp1_sdk::{
-    Elf, ProveRequest, Prover, utils,
-    blocking::{CpuProver, ProveRequest as BlockingProveRequest, Prover as BlockingProver},
-};
 #[cfg(feature = "cuda")]
 use sp1_sdk::ProverClient;
+use sp1_sdk::{
+    Elf, ProveRequest, Prover,
+    blocking::{CpuProver, ProveRequest as BlockingProveRequest, Prover as BlockingProver},
+    utils,
+};
 use tracing::{debug, info, warn};
 
 /// Which final proof artifact to produce, selected by the `PROOF_MODE` env var.

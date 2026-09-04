@@ -120,10 +120,7 @@ pub(crate) fn extract_attributes(attrs: &[Attribute]) -> syn::Result<ExtractedAt
         // Extract `#[base_slot(N)]` attribute
         else if attr.path().is_ident("base_slot") {
             if base_slot_attr.is_some() {
-                return Err(syn::Error::new_spanned(
-                    attr,
-                    "duplicate `base_slot` attribute",
-                ));
+                return Err(syn::Error::new_spanned(attr, "duplicate `base_slot` attribute"));
             }
             if slot_attr.is_some() {
                 return Err(syn::Error::new_spanned(
@@ -258,8 +255,9 @@ pub(crate) fn extract_mapping_types(ty: &Type) -> Option<(&Type, &Type)> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use syn::parse_quote;
+
+    use super::*;
 
     #[test]
     fn test_to_snake_case() {

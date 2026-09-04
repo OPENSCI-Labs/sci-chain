@@ -11,8 +11,9 @@
 //! - **Packed**: When `T::BYTES <= 16`, multiple elements fit in one slot
 //! - **Unpacked**: When `T::BYTES > 16` or doesn't divide 32, each element uses full slot(s)
 
-use alloy_primitives::{Address, U256};
 use std::ops::{Index, IndexMut};
+
+use alloy_primitives::{Address, U256};
 use tempo_precompiles_macros;
 
 use crate::{
@@ -66,11 +67,7 @@ impl<T: StorableType, const N: usize> ArrayHandler<T, N> {
     /// Creates a new handler for the array at the given base slot and address.
     #[inline]
     pub fn new(base_slot: U256, address: Address) -> Self {
-        Self {
-            base_slot,
-            address,
-            cache: HandlerCache::new(),
-        }
+        Self { base_slot, address, cache: HandlerCache::new() }
     }
 
     /// Returns a `Slot` accessor for full-array operations.
@@ -112,10 +109,7 @@ impl<T: StorableType, const N: usize> ArrayHandler<T, N> {
             return None;
         }
         let (base_slot, address) = (self.base_slot, self.address);
-        Some(
-            self.cache
-                .get_or_insert(&index, || Self::compute_handler(base_slot, address, index)),
-        )
+        Some(self.cache.get_or_insert(&index, || Self::compute_handler(base_slot, address, index)))
     }
 
     /// Computes the handler for a given index (unchecked).
@@ -146,8 +140,7 @@ impl<T: StorableType, const N: usize> Index<usize> for ArrayHandler<T, N> {
     fn index(&self, index: usize) -> &Self::Output {
         assert!(index < N, "index out of bounds: {index} >= {N}");
         let (base_slot, address) = (self.base_slot, self.address);
-        self.cache
-            .get_or_insert(&index, || Self::compute_handler(base_slot, address, index))
+        self.cache.get_or_insert(&index, || Self::compute_handler(base_slot, address, index))
     }
 }
 
@@ -159,8 +152,7 @@ impl<T: StorableType, const N: usize> IndexMut<usize> for ArrayHandler<T, N> {
     fn index_mut(&mut self, index: usize) -> &mut Self::Output {
         assert!(index < N, "index out of bounds: {index} >= {N}");
         let (base_slot, address) = (self.base_slot, self.address);
-        self.cache
-            .get_or_insert_mut(&index, || Self::compute_handler(base_slot, address, index))
+        self.cache.get_or_insert_mut(&index, || Self::compute_handler(base_slot, address, index))
     }
 }
 
@@ -207,13 +199,14 @@ where
 
 #[cfg(test)]
 mod tests {
+    use alloy_primitives::aliases::U96;
+    use proptest::prelude::*;
+
     use super::*;
     use crate::{
         storage::{Layout, LayoutCtx, PrecompileStorageProvider, StorageCtx},
         test_util::setup_storage,
     };
-    use alloy_primitives::aliases::U96;
-    use proptest::prelude::*;
 
     // Strategy for generating random U256 slot values that won't overflow
     fn arb_safe_slot() -> impl Strategy<Value = U256> {
@@ -339,11 +332,8 @@ mod tests {
         let base_slot = U256::from(400);
 
         // [Address; 3] should use 3 slots (20 bytes doesn't divide 32 evenly)
-        let data: [Address; 3] = [
-            Address::repeat_byte(0x11),
-            Address::repeat_byte(0x22),
-            Address::repeat_byte(0x33),
-        ];
+        let data: [Address; 3] =
+            [Address::repeat_byte(0x11), Address::repeat_byte(0x22), Address::repeat_byte(0x33)];
 
         // Verify slot count
         assert_eq!(<[Address; 3] as StorableType>::LAYOUT, Layout::Slots(3));
@@ -369,10 +359,7 @@ mod tests {
         // Both elements packed in slot 0: low 12 bytes = elem 0, next 12 bytes = elem 1.
         let expected = U256::from(1) | (U256::from(2) << 96);
         assert_eq!(storage.sload(address, base_slot).unwrap(), expected);
-        assert_eq!(
-            storage.sload(address, base_slot + U256::ONE).unwrap(),
-            U256::ZERO
-        );
+        assert_eq!(storage.sload(address, base_slot + U256::ONE).unwrap(), U256::ZERO);
 
         StorageCtx::enter(&mut storage, || {
             let mut handler = <[U96; 2]>::handle(base_slot, LayoutCtx::FULL, address);
@@ -386,10 +373,7 @@ mod tests {
 
         let after = U256::from(1) | (U256::from(3) << 96);
         assert_eq!(storage.sload(address, base_slot).unwrap(), after);
-        assert_eq!(
-            storage.sload(address, base_slot + U256::ONE).unwrap(),
-            U256::ZERO
-        );
+        assert_eq!(storage.sload(address, base_slot + U256::ONE).unwrap(), U256::ZERO);
     }
 
     #[test]
@@ -397,13 +381,8 @@ mod tests {
         let (mut storage, address) = setup_storage();
         let base_slot = U256::from(550);
 
-        let data = [
-            U96::from(1u64),
-            U96::from(2u64),
-            U96::from(3u64),
-            U96::from(4u64),
-            U96::from(5u64),
-        ];
+        let data =
+            [U96::from(1u64), U96::from(2u64), U96::from(3u64), U96::from(4u64), U96::from(5u64)];
 
         // LAYOUT must report 3 slots (Solidity: ceil(5/2) = 3).
         assert_eq!(
@@ -437,9 +416,7 @@ mod tests {
         // if the bulk-store loop uses the buggy `(5*12).div_ceil(32) = 2`
         // slot-count formula).
         assert_eq!(
-            storage
-                .sload(address, base_slot + U256::from(2u64))
-                .unwrap(),
+            storage.sload(address, base_slot + U256::from(2u64)).unwrap(),
             U256::from(5),
             "slot 2 must hold elem4 in low 12 bytes (slot-count formula must use \
              ceil(N / itemsPerSlot), not (N*B).div_ceil(32))"
@@ -447,9 +424,7 @@ mod tests {
 
         // Slot 3 must be untouched.
         assert_eq!(
-            storage
-                .sload(address, base_slot + U256::from(3u64))
-                .unwrap(),
+            storage.sload(address, base_slot + U256::from(3u64)).unwrap(),
             U256::ZERO,
             "slot 3 must remain untouched"
         );
@@ -471,9 +446,7 @@ mod tests {
             handler[4].write(U96::from(99u64)).unwrap();
         });
         assert_eq!(
-            storage
-                .sload(address, base_slot + U256::from(2u64))
-                .unwrap(),
+            storage.sload(address, base_slot + U256::from(2u64)).unwrap(),
             U256::from(99),
             "indexed write to elem 4 must update slot base+2"
         );

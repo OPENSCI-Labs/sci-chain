@@ -44,11 +44,6 @@ pub use handler::{
 #[cfg(any(test, feature = "test-utils"))]
 pub mod test_util;
 
-pub use tempo_contracts::precompiles::{
-    ACCOUNT_KEYCHAIN_ADDRESS, AGENT_CIRCUIT_BREAKER_ADDRESS, SCI_AGENT_STATE_ADDRESS,
-};
-
-use crate::storage::StorageCtx;
 use alloy_evm::precompiles::{DynPrecompile, PrecompilesMap};
 use alloy_primitives::{Address, Bytes};
 use alloy_sol_types::{SolCall, SolError, sol};
@@ -59,6 +54,11 @@ use revm::{
     precompile::{PrecompileHalt, PrecompileId, PrecompileOutput, PrecompileResult, to_revm34},
     primitives::hardfork::SpecId,
 };
+pub use tempo_contracts::precompiles::{
+    ACCOUNT_KEYCHAIN_ADDRESS, AGENT_CIRCUIT_BREAKER_ADDRESS, SCI_AGENT_STATE_ADDRESS,
+};
+
+use crate::storage::StorageCtx;
 
 /// Input per word cost. Covers ABI decoding and cloning of input into call data.
 pub const INPUT_PER_WORD_COST: u64 = 6;
@@ -69,9 +69,7 @@ pub const ECRECOVER_GAS: u64 = 3_000;
 /// Returns the gas cost for decoding calldata of the given length, rounded up to word boundaries.
 #[inline]
 pub fn input_cost(calldata_len: usize) -> u64 {
-    calldata_len
-        .div_ceil(32)
-        .saturating_mul(INPUT_PER_WORD_COST as usize) as u64
+    calldata_len.div_ceil(32).saturating_mul(INPUT_PER_WORD_COST as usize) as u64
 }
 
 /// Trait implemented by all SCI Chain precompile contract types.
@@ -216,7 +214,10 @@ pub(crate) fn metadata<T: SolCall>(f: impl FnOnce() -> Result<T::Return>) -> Pre
 
 /// Dispatches a read-only call with decoded arguments, encoding the return via `T`.
 #[inline]
-pub(crate) fn view<T: SolCall>(call: T, f: impl FnOnce(T) -> Result<T::Return>) -> PrecompileResult {
+pub(crate) fn view<T: SolCall>(
+    call: T,
+    f: impl FnOnce(T) -> Result<T::Return>,
+) -> PrecompileResult {
     f(call).into_precompile_result(0, 0, |ret| T::abi_encode_returns(&ret).into())
 }
 
@@ -228,11 +229,7 @@ pub(crate) fn mutate<T: SolCall>(
     f: impl FnOnce(Address, T) -> Result<T::Return>,
 ) -> PrecompileResult {
     if StorageCtx.is_static() {
-        return Ok(PrecompileOutput::revert(
-            0,
-            StaticCallNotAllowed {}.abi_encode().into(),
-            0,
-        ));
+        return Ok(PrecompileOutput::revert(0, StaticCallNotAllowed {}.abi_encode().into(), 0));
     }
     f(sender, call).into_precompile_result(0, 0, |ret| T::abi_encode_returns(&ret).into())
 }
@@ -245,11 +242,7 @@ pub(crate) fn mutate_void<T: SolCall>(
     f: impl FnOnce(Address, T) -> Result<()>,
 ) -> PrecompileResult {
     if StorageCtx.is_static() {
-        return Ok(PrecompileOutput::revert(
-            0,
-            StaticCallNotAllowed {}.abi_encode().into(),
-            0,
-        ));
+        return Ok(PrecompileOutput::revert(0, StaticCallNotAllowed {}.abi_encode().into(), 0));
     }
     f(sender, call).into_precompile_result(0, 0, |()| Bytes::new())
 }
@@ -300,12 +293,7 @@ impl<'a> SelectorSchedule<'a> {
     /// Returns `true` if this schedule gates out `selector` under the `active` hardfork.
     #[inline]
     fn rejects(self, selector: [u8; 4], active: TempoHardfork) -> bool {
-        if self.hardfork <= active {
-            self.dropped
-        } else {
-            self.added
-        }
-        .contains(&selector)
+        if self.hardfork <= active { self.dropped } else { self.added }.contains(&selector)
     }
 }
 
@@ -331,7 +319,8 @@ pub(crate) fn dispatch_call<T>(
 
     let selector: [u8; 4] = calldata[..4].try_into().expect("calldata len >= 4");
     if hardforks.iter().any(|s| s.rejects(selector, storage.spec())) {
-        return storage.error_result(error::TempoPrecompileError::UnknownFunctionSelector(selector));
+        return storage
+            .error_result(error::TempoPrecompileError::UnknownFunctionSelector(selector));
     }
 
     match decode(calldata) {
@@ -339,8 +328,9 @@ pub(crate) fn dispatch_call<T>(
             res.gas_used = storage.gas_used();
             res
         }),
-        Err(alloy_sol_types::Error::UnknownSelector { selector, .. }) => storage
-            .error_result(error::TempoPrecompileError::UnknownFunctionSelector(*selector)),
+        Err(alloy_sol_types::Error::UnknownSelector { selector, .. }) => {
+            storage.error_result(error::TempoPrecompileError::UnknownFunctionSelector(*selector))
+        }
         Err(_) => Ok(storage.revert_output(Bytes::new())),
     }
 }

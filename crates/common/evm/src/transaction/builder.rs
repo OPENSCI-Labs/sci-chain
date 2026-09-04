@@ -135,6 +135,11 @@ impl BaseTransactionBuilder {
 
         let base = self.base.build()?;
 
-        Ok(BaseTransaction { base, enveloped_tx: self.enveloped_tx, deposit: self.deposit, aa: None })
+        Ok(BaseTransaction {
+            base,
+            enveloped_tx: self.enveloped_tx,
+            deposit: self.deposit,
+            aa: None,
+        })
     }
 }

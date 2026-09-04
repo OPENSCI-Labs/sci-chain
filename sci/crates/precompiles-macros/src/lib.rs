@@ -40,18 +40,13 @@ impl Parse for ContractConfig {
 
         let ident: Ident = input.parse()?;
         if ident != "addr" && ident != "address" {
-            return Err(syn::Error::new(
-                ident.span(),
-                "only `addr` attribute is supported",
-            ));
+            return Err(syn::Error::new(ident.span(), "only `addr` attribute is supported"));
         }
 
         input.parse::<Token![=]>()?;
         let address: Expr = input.parse()?;
 
-        Ok(Self {
-            address: Some(address),
-        })
+        Ok(Self { address: Some(address) })
     }
 }
 
@@ -167,12 +162,7 @@ fn parse_fields(input: DeriveInput) -> syn::Result<Vec<FieldInfo>> {
             }
 
             let (slot, base_slot) = extract_attributes(&field.attrs)?;
-            Ok(FieldInfo {
-                name: name.to_owned(),
-                ty: field.ty,
-                slot,
-                base_slot,
-            })
+            Ok(FieldInfo { name: name.to_owned(), ty: field.ty, slot, base_slot })
         })
         .collect()
 }

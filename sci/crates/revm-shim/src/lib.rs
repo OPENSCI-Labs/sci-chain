@@ -42,28 +42,25 @@
 //! never removes any revm 34 item. Adding v38 surface here does not perturb
 //! anything downstream that still binds to real `revm::precompile::PrecompileOutput`.
 
-pub mod precompile;
-pub mod interpreter;
 pub mod gas_params_ext;
+pub mod interpreter;
+pub mod precompile;
 
 // Re-export every revm 34 top-level submodule except `precompile` and
 // `interpreter` (both shadowed above). Tempo verbatim source like
 // `revm::handler::EthPrecompiles` or `revm::context::CfgEnv` resolves through
 // these.
+// Re-export the v38 state-gas extension trait at the crate root so verbatim
+// Tempo source can bring it into scope with `use revm::GasParamsExt;`.
+pub use gas_params_ext::GasParamsExt;
+pub use precompile::to_revm34;
+// Top-level item re-exports (mirror revm 34's `lib.rs`).
+pub use revm::{
+    Context, Database, DatabaseCommit, DatabaseRef, ExecuteCommitEvm, ExecuteEvm, InspectCommitEvm,
+    InspectEvm, InspectSystemCallEvm, Inspector, Journal, JournalEntry, MainBuilder, MainContext,
+    MainnetEvm, SystemCallCommitEvm, SystemCallEvm,
+};
 pub use revm::{
     bytecode, context, context_interface, database, database_interface, handler, inspector,
     primitives, state,
 };
-
-// Re-export the v38 state-gas extension trait at the crate root so verbatim
-// Tempo source can bring it into scope with `use revm::GasParamsExt;`.
-pub use gas_params_ext::GasParamsExt;
-
-// Top-level item re-exports (mirror revm 34's `lib.rs`).
-pub use revm::{
-    Context, Database, DatabaseCommit, DatabaseRef, ExecuteCommitEvm, ExecuteEvm,
-    InspectCommitEvm, InspectEvm, InspectSystemCallEvm, Inspector, Journal, JournalEntry,
-    MainBuilder, MainContext, MainnetEvm, SystemCallCommitEvm, SystemCallEvm,
-};
-
-pub use precompile::to_revm34;

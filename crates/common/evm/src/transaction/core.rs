@@ -59,12 +59,7 @@ impl<T: Transaction> AsRef<T> for BaseTransaction<T> {
 impl<T: Transaction> BaseTransaction<T> {
     /// Create a new Base transaction.
     pub fn new(base: T) -> Self {
-        Self {
-            base,
-            enveloped_tx: None,
-            deposit: DepositTransactionParts::default(),
-            aa: None,
-        }
+        Self { base, enveloped_tx: None, deposit: DepositTransactionParts::default(), aa: None }
     }
 }
 

@@ -700,11 +700,7 @@ mod tests {
                     value: U256::from(1u64),
                     input: Bytes::from_static(&[0xde, 0xad, 0xbe, 0xef]),
                 },
-                Call {
-                    to: TxKind::Create,
-                    value: U256::ZERO,
-                    input: Bytes::new(),
-                },
+                Call { to: TxKind::Create, value: U256::ZERO, input: Bytes::new() },
             ],
             access_list: Default::default(),
             fee_payer: Some(address!("0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266")),

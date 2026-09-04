@@ -12,16 +12,17 @@
 
 pub mod dispatch;
 
-use crate::{
-    error::Result,
-    storage::{Handler, Mapping},
-};
 use alloy_primitives::Address;
 use tempo_contracts::precompiles::{
     AGENT_CIRCUIT_BREAKER_ADDRESS, ISciAgentState, SCI_AGENT_STATE_ADDRESS, SciAgentStateError,
     SciAgentStateEvent, isTrippedCall, tripKeyCall, untripKeyCall,
 };
 use tempo_precompiles_macros::contract;
+
+use crate::{
+    error::Result,
+    storage::{Handler, Mapping},
+};
 
 #[contract(addr = SCI_AGENT_STATE_ADDRESS)]
 pub struct SciAgentState {
@@ -41,12 +42,10 @@ impl SciAgentState {
             return Err(SciAgentStateError::unauthorized_caller().into());
         }
         self.tripped[call.sessionKey].write(true)?;
-        self.emit_event(SciAgentStateEvent::TripStateUpdate(
-            ISciAgentState::TripStateUpdate {
-                sessionKey: call.sessionKey,
-                isTripped: true,
-            },
-        ))
+        self.emit_event(SciAgentStateEvent::TripStateUpdate(ISciAgentState::TripStateUpdate {
+            sessionKey: call.sessionKey,
+            isTripped: true,
+        }))
     }
 
     /// Sets `tripped[sessionKey] = false`. Authorized to [`AGENT_CIRCUIT_BREAKER_ADDRESS`] only.
@@ -55,12 +54,10 @@ impl SciAgentState {
             return Err(SciAgentStateError::unauthorized_caller().into());
         }
         self.tripped[call.sessionKey].write(false)?;
-        self.emit_event(SciAgentStateEvent::TripStateUpdate(
-            ISciAgentState::TripStateUpdate {
-                sessionKey: call.sessionKey,
-                isTripped: false,
-            },
-        ))
+        self.emit_event(SciAgentStateEvent::TripStateUpdate(ISciAgentState::TripStateUpdate {
+            sessionKey: call.sessionKey,
+            isTripped: false,
+        }))
     }
 
     /// Returns the current trip flag for `sessionKey`.
@@ -71,14 +68,15 @@ impl SciAgentState {
 
 #[cfg(test)]
 mod tests {
+    use alloy_primitives::Address;
+    use alloy_sol_types::{SolCall, SolInterface};
+    use tempo_chainspec::hardfork::TempoHardfork;
+
     use super::*;
     use crate::{
         Precompile,
         storage::{StorageCtx, hashmap::HashMapStorageProvider},
     };
-    use alloy_primitives::Address;
-    use alloy_sol_types::{SolCall, SolInterface};
-    use tempo_chainspec::hardfork::TempoHardfork;
 
     #[test]
     fn trip_key_unauthorized_caller_reverts() -> eyre::Result<()> {
@@ -118,10 +116,7 @@ mod tests {
             assert!(state.tripped[session_key].read()?);
 
             state.assert_emitted_events(vec![SciAgentStateEvent::TripStateUpdate(
-                ISciAgentState::TripStateUpdate {
-                    sessionKey: session_key,
-                    isTripped: true,
-                },
+                ISciAgentState::TripStateUpdate { sessionKey: session_key, isTripped: true },
             )]);
             Ok(())
         })

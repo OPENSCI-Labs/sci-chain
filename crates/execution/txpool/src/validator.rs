@@ -19,12 +19,12 @@ use reth_primitives_traits::{
     transaction::error::InvalidTransactionError,
 };
 use reth_storage_api::{AccountInfoReader, AccountReader, BlockReaderIdExt, StateProviderFactory};
-use sci_precompiles::{ACCOUNT_KEYCHAIN_ADDRESS, AccountKeychain};
 use reth_transaction_pool::{
     EthPoolTransaction, EthTransactionValidator, TransactionOrigin, TransactionValidationOutcome,
     TransactionValidator,
     error::{InvalidPoolTransactionError, PoolTransactionError},
 };
+use sci_precompiles::{ACCOUNT_KEYCHAIN_ADDRESS, AccountKeychain};
 
 use crate::BasePooledTx;
 
@@ -369,9 +369,7 @@ where
         // Pool-only DoS field limits for AA txs, checked before the (more expensive) inner
         // validation so an oversized AA from a malicious peer is rejected cheaply and the peer
         // can be penalized (`BaseTxPoolError::is_bad_transaction` = true).
-        if is_aa
-            && let Err(err) = Self::ensure_aa_field_limits(&transaction)
-        {
+        if is_aa && let Err(err) = Self::ensure_aa_field_limits(&transaction) {
             return TransactionValidationOutcome::Invalid(
                 transaction,
                 InvalidPoolTransactionError::other(err),
@@ -526,8 +524,7 @@ where
         let sponsor = valid_tx.transaction().aa().and_then(|aa| {
             aa.fee_payer.filter(|fp| *fp != sender).map(|fp| {
                 let gas = U256::from(aa.max_fee_per_gas).saturating_mul(U256::from(aa.gas_limit));
-                let value =
-                    aa.calls.iter().fold(U256::ZERO, |acc, c| acc.saturating_add(c.value));
+                let value = aa.calls.iter().fold(U256::ZERO, |acc, c| acc.saturating_add(c.value));
                 (fp, gas, value, aa.gas_limit)
             })
         });
@@ -704,11 +701,13 @@ where
 
 #[cfg(test)]
 mod tests {
-    use alloy_consensus::{SignableTransaction, TxEip1559, transaction::SignerRecoverable};
+    use alloy_consensus::{
+        SignableTransaction, TxEip1559,
+        transaction::{Recovered, SignerRecoverable},
+    };
     use alloy_eips::eip2718::Encodable2718;
     use alloy_primitives::{Address, TxKind, U256, bytes, hex::decode};
     use alloy_signer::SignerSync;
-    use alloy_consensus::transaction::Recovered;
     use base_common_chains::ChainConfig;
     use base_common_consensus::{
         BaseAaTransaction, BasePrimitives, BaseTransactionSigned, BaseTxEnvelope, Call, TxDeposit,

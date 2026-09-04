@@ -1,7 +1,5 @@
 //! ABI dispatch for the [`AccountKeychain`] precompile.
 
-use super::{AccountKeychain, KeyRestrictions, TokenLimit, authorizeKeyCall};
-use crate::{Precompile, SelectorSchedule, charge_input_cost, dispatch_call, mutate_void, view};
 use alloy_primitives::Address;
 use alloy_sol_types::{SolCall, SolInterface};
 use revm::precompile::PrecompileResult;
@@ -10,6 +8,9 @@ use tempo_contracts::precompiles::{
     AccountKeychainError,
     IAccountKeychain::{self, IAccountKeychainCalls},
 };
+
+use super::{AccountKeychain, KeyRestrictions, TokenLimit, authorizeKeyCall};
+use crate::{Precompile, SelectorSchedule, charge_input_cost, dispatch_call, mutate_void, view};
 
 const T3_ADDED: &[[u8; 4]] = &[
     authorizeKeyCall::SELECTOR,
@@ -99,19 +100,13 @@ impl Precompile for AccountKeychain {
                     mutate_void(call, msg_sender, |sender, c| self.revoke_key(sender, c))
                 }
                 IAccountKeychainCalls::updateSpendingLimit(call) => {
-                    mutate_void(call, msg_sender, |sender, c| {
-                        self.update_spending_limit(sender, c)
-                    })
+                    mutate_void(call, msg_sender, |sender, c| self.update_spending_limit(sender, c))
                 }
                 IAccountKeychainCalls::setAllowedCalls(call) => {
-                    mutate_void(call, msg_sender, |sender, c| {
-                        self.set_allowed_calls(sender, c)
-                    })
+                    mutate_void(call, msg_sender, |sender, c| self.set_allowed_calls(sender, c))
                 }
                 IAccountKeychainCalls::removeAllowedCalls(call) => {
-                    mutate_void(call, msg_sender, |sender, c| {
-                        self.remove_allowed_calls(sender, c)
-                    })
+                    mutate_void(call, msg_sender, |sender, c| self.remove_allowed_calls(sender, c))
                 }
                 IAccountKeychainCalls::getKey(call) => view(call, |c| self.get_key(c)),
                 IAccountKeychainCalls::getRemainingLimit(call) => {
@@ -136,6 +131,11 @@ impl Precompile for AccountKeychain {
 
 #[cfg(test)]
 mod tests {
+    use alloy_primitives::{B256, U256};
+    use alloy_sol_types::{SolCall, SolError};
+    use tempo_chainspec::hardfork::TempoHardfork;
+    use tempo_contracts::precompiles::{UnknownFunctionSelector, legacyAuthorizeKeyCall};
+
     use super::*;
     use crate::{
         Precompile,
@@ -143,10 +143,6 @@ mod tests {
         storage::{Handler, StorageCtx, hashmap::HashMapStorageProvider},
         test_util::{assert_full_coverage, check_selector_coverage},
     };
-    use alloy_primitives::{B256, U256};
-    use alloy_sol_types::{SolCall, SolError};
-    use tempo_chainspec::hardfork::TempoHardfork;
-    use tempo_contracts::precompiles::{UnknownFunctionSelector, legacyAuthorizeKeyCall};
 
     #[test]
     fn test_account_keychain_selector_coverage() -> eyre::Result<()> {
@@ -189,12 +185,10 @@ mod tests {
                     tempo_contracts::precompiles::IAccountKeychain::SignatureType::Secp256k1,
                 expiry: u64::MAX,
                 enforceLimits: true,
-                limits: vec![
-                    tempo_contracts::precompiles::IAccountKeychain::LegacyTokenLimit {
-                        token,
-                        amount: U256::from(100),
-                    },
-                ],
+                limits: vec![tempo_contracts::precompiles::IAccountKeychain::LegacyTokenLimit {
+                    token,
+                    amount: U256::from(100),
+                }],
             }
             .abi_encode();
 
@@ -288,28 +282,17 @@ mod tests {
                 signatureType: IAccountKeychain::SignatureType::Secp256k1,
                 expiry: u64::MAX,
                 enforceLimits: true,
-                limits: vec![IAccountKeychain::LegacyTokenLimit {
-                    token,
-                    amount: U256::from(123),
-                }],
+                limits: vec![IAccountKeychain::LegacyTokenLimit { token, amount: U256::from(123) }],
             }
             .abi_encode();
             let _ = keychain.call(&authorize_calldata, account)?;
 
-            let get_limit_calldata = getRemainingLimitCall {
-                account,
-                keyId: key_id,
-                token,
-            }
-            .abi_encode();
+            let get_limit_calldata =
+                getRemainingLimitCall { account, keyId: key_id, token }.abi_encode();
 
             let output = keychain.call(&get_limit_calldata, account)?;
             assert!(!output.is_revert());
-            assert_eq!(
-                output.bytes.len(),
-                32,
-                "pre-T3 should return legacy uint256"
-            );
+            assert_eq!(output.bytes.len(), 32, "pre-T3 should return legacy uint256");
 
             let remaining = getRemainingLimitCall::abi_decode_returns(&output.bytes)?;
             assert_eq!(remaining, U256::from(123));
@@ -352,24 +335,13 @@ mod tests {
             let mut keychain = AccountKeychain::new();
             keychain.initialize()?;
 
-            let calldata = getRemainingLimitCall {
-                account,
-                keyId: key_id,
-                token,
-            }
-            .abi_encode();
+            let calldata = getRemainingLimitCall { account, keyId: key_id, token }.abi_encode();
 
             let result = keychain.call(&calldata, account)?;
-            assert!(
-                result.is_revert(),
-                "expected revert for dropped selector post-T3"
-            );
+            assert!(result.is_revert(), "expected revert for dropped selector post-T3");
 
             let decoded = UnknownFunctionSelector::abi_decode(&result.bytes)?;
-            assert_eq!(
-                decoded.selector.as_slice(),
-                &getRemainingLimitCall::SELECTOR,
-            );
+            assert_eq!(decoded.selector.as_slice(), &getRemainingLimitCall::SELECTOR,);
 
             Ok(())
         })

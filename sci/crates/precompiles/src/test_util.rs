@@ -1,10 +1,11 @@
 //! Test utilities shared by precompile unit tests.
 
-use crate::{Precompile, error::Result, storage::hashmap::HashMapStorageProvider};
 use alloy_primitives::{Address, U256};
 use alloy_sol_types::SolError;
 use revm::precompile::PrecompileError;
 use tempo_contracts::precompiles::UnknownFunctionSelector;
+
+use crate::{Precompile, error::Result, storage::hashmap::HashMapStorageProvider};
 
 /// **No-op stub** of Tempo's `tip20::TIP20Setup` helper, kept so that ported tests which
 /// call `TIP20Setup::path_usd(account).apply()?` compile verbatim against the SCI source.
@@ -115,11 +116,8 @@ pub fn check_selector_coverage<P: Precompile>(
 
 /// Asserts that multiple selector coverage checks all pass (no unsupported selectors).
 pub fn assert_full_coverage(results: impl IntoIterator<Item = Vec<([u8; 4], &'static str)>>) {
-    let all_unsupported: Vec<_> = results
-        .into_iter()
-        .flat_map(|r| r.into_iter())
-        .map(|(_, name)| name)
-        .collect();
+    let all_unsupported: Vec<_> =
+        results.into_iter().flat_map(|r| r.into_iter()).map(|(_, name)| name).collect();
 
     assert!(
         all_unsupported.is_empty(),

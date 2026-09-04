@@ -2,14 +2,10 @@
 //! independent of Base's `OpHandler` (which lives in `base-common-evm`, a crate that
 //! already depends on us). See `handler/mod.rs` for the architecture rationale.
 
-use crate::{
-    AccountKeychain, SciAgentState,
-    handler::decode::classify_token_call,
-    storage::{Handler, StorageCtx, evm::EvmPrecompileStorageProvider},
-};
+use std::{collections::HashMap, fmt::Debug};
+
 use alloy_evm::{Database as AlloyDatabase, EvmInternals};
 use alloy_primitives::{Address, U256};
-use std::collections::HashMap;
 use revm::{
     context_interface::{
         Cfg, ContextTr, Database, JournalTr, Transaction,
@@ -18,9 +14,14 @@ use revm::{
     handler::EvmTr,
     primitives::TxKind,
 };
-use std::fmt::Debug;
 use tempo_chainspec::hardfork::TempoHardfork;
 use tempo_contracts::precompiles::isTrippedCall;
+
+use crate::{
+    AccountKeychain, SciAgentState,
+    handler::decode::classify_token_call,
+    storage::{Handler, StorageCtx, evm::EvmPrecompileStorageProvider},
+};
 
 /// Outcome reported back to the handler wrapper.
 ///
@@ -60,7 +61,9 @@ pub struct AaCall {
 /// (non-agent) tx so a user calling the keychain directly still works.
 pub fn set_keychain_tx_origin<EVM, ERROR>(evm: &mut EVM) -> Result<(), ERROR>
 where
-    EVM: EvmTr<Context: ContextTr<Db: AlloyDatabase, Journal: JournalTr<Database: AlloyDatabase> + Debug>>,
+    EVM: EvmTr<
+        Context: ContextTr<Db: AlloyDatabase, Journal: JournalTr<Database: AlloyDatabase> + Debug>,
+    >,
     ERROR: From<<<EVM::Context as ContextTr>::Db as Database>::Error>
         + FromStringError
         + From<InvalidTransaction>,
@@ -82,7 +85,9 @@ where
 /// `msg_sender`. Returns `Address::ZERO` when no origin has been seeded for this tx.
 pub fn keychain_tx_origin<EVM, ERROR>(evm: &mut EVM) -> Result<Address, ERROR>
 where
-    EVM: EvmTr<Context: ContextTr<Db: AlloyDatabase, Journal: JournalTr<Database: AlloyDatabase> + Debug>>,
+    EVM: EvmTr<
+        Context: ContextTr<Db: AlloyDatabase, Journal: JournalTr<Database: AlloyDatabase> + Debug>,
+    >,
     ERROR: From<<<EVM::Context as ContextTr>::Db as Database>::Error>
         + FromStringError
         + From<InvalidTransaction>,
@@ -123,7 +128,9 @@ pub fn run_aa_keychain_hook<EVM, ERROR>(
     gas_reservation: U256,
 ) -> Result<HookOutcome<ERROR>, ERROR>
 where
-    EVM: EvmTr<Context: ContextTr<Db: AlloyDatabase, Journal: JournalTr<Database: AlloyDatabase> + Debug>>,
+    EVM: EvmTr<
+        Context: ContextTr<Db: AlloyDatabase, Journal: JournalTr<Database: AlloyDatabase> + Debug>,
+    >,
     ERROR: From<<<EVM::Context as ContextTr>::Db as Database>::Error>
         + FromStringError
         + From<InvalidTransaction>,
@@ -163,10 +170,9 @@ where
         if cb.is_tripped(isTrippedCall { sessionKey: session_key })? {
             // Business error (not Fatal): a tripped key is a per-tx rejection, and the
             // system-error branch below must not escalate it to a block-build failure.
-            return Err(tempo_contracts::precompiles::SciAgentStateError::key_tripped(
-                session_key,
-            )
-            .into());
+            return Err(
+                tempo_contracts::precompiles::SciAgentStateError::key_tripped(session_key).into()
+            );
         }
 
         let mut kc = AccountKeychain::default();
@@ -254,7 +260,9 @@ pub fn apply_aa_post_execution_deductions<EVM, ERROR>(
     gas_deduction: U256,
 ) -> Result<(), ERROR>
 where
-    EVM: EvmTr<Context: ContextTr<Db: AlloyDatabase, Journal: JournalTr<Database: AlloyDatabase> + Debug>>,
+    EVM: EvmTr<
+        Context: ContextTr<Db: AlloyDatabase, Journal: JournalTr<Database: AlloyDatabase> + Debug>,
+    >,
     ERROR: From<<<EVM::Context as ContextTr>::Db as Database>::Error>
         + FromStringError
         + From<InvalidTransaction>,

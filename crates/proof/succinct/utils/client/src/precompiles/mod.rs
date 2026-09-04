@@ -103,11 +103,11 @@ impl BaseZkvmPrecompiles {
 impl<CTX> PrecompileProvider<CTX> for BaseZkvmPrecompiles
 where
     CTX: ContextTr<
-        Cfg: Cfg<Spec = BaseSpecId>,
-        Db: alloy_evm::Database,
-        Journal: revm::context_interface::JournalTr<Database: alloy_evm::Database>
-                     + core::fmt::Debug,
-    >,
+            Cfg: Cfg<Spec = BaseSpecId>,
+            Db: alloy_evm::Database,
+            Journal: revm::context_interface::JournalTr<Database: alloy_evm::Database>
+                         + core::fmt::Debug,
+        >,
 {
     type Output = InterpreterResult;
 
@@ -607,8 +607,8 @@ mod tests {
         let mut precompiles =
             BaseZkvmPrecompiles::new_with_spec(BaseSpecId::new(BaseUpgrade::Bedrock));
 
-        let data = getKeyCall { account: Address::ZERO, keyId: Address::from([0x11; 20]) }
-            .abi_encode();
+        let data =
+            getKeyCall { account: Address::ZERO, keyId: Address::from([0x11; 20]) }.abi_encode();
         let inputs = direct_call_inputs(
             sci_precompiles::ACCOUNT_KEYCHAIN_ADDRESS,
             Bytes::from(data),

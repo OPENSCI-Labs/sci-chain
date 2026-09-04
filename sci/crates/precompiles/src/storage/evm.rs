@@ -1,15 +1,15 @@
-use alloy_primitives::{Address, Log, LogData, U256};
 use alloy_evm::EvmInternals;
+use alloy_primitives::{Address, Log, LogData, U256};
 use revm::{
-    context::{Block, CfgEnv, journaled_state::JournalCheckpoint},
-    context_interface::cfg::{GasParams, gas},
-    interpreter::gas::GasTracker,
-    state::{AccountInfo, Bytecode},
     // SCI patch — bring the v38 state-gas extension trait into scope so
     // `gas_params.code_deposit_state_gas(...)` / `create_state_gas()` /
     // `sstore_state_gas(...)` calls below resolve to the shim's no-op stubs.
     // Re-apply on every Tempo sync.
     GasParamsExt,
+    context::{Block, CfgEnv, journaled_state::JournalCheckpoint},
+    context_interface::cfg::{GasParams, gas},
+    interpreter::gas::GasTracker,
+    state::{AccountInfo, Bytecode},
 };
 use tempo_chainspec::hardfork::TempoHardfork;
 
@@ -58,15 +58,7 @@ impl<'a> EvmPrecompileStorageProvider<'a> {
         // SCI patch — revm 34's `CfgEnv` has no `enable_amsterdam_eip8037`
         // field. Hardcoded `false` because SCI does not adopt EIP-8037
         // (TIP-1016) state-gas accounting. Re-apply on every Tempo sync.
-        Self::new(
-            internals,
-            u64::MAX,
-            0,
-            cfg.spec,
-            false,
-            false,
-            cfg.gas_params.clone(),
-        )
+        Self::new(internals, u64::MAX, 0, cfg.spec, false, false, cfg.gas_params.clone())
     }
 
     /// Creates a new storage provider with the given gas limit, deriving spec from `cfg`.
@@ -77,15 +69,7 @@ impl<'a> EvmPrecompileStorageProvider<'a> {
         reservoir: u64,
     ) -> Self {
         // SCI patch — see `new_max_gas` above.
-        Self::new(
-            internals,
-            gas_limit,
-            reservoir,
-            cfg.spec,
-            false,
-            false,
-            cfg.gas_params.clone(),
-        )
+        Self::new(internals, gas_limit, reservoir, cfg.spec, false, false, cfg.gas_params.clone())
     }
 
     #[inline]
@@ -160,10 +144,7 @@ impl<'a> PrecompileStorageProvider for EvmPrecompileStorageProvider<'a> {
             .load_account_mut_skip_cold_load(address, insufficient_gas_for_cold_load)?;
 
         if !self.spec.is_t4() {
-            deduct_gas(
-                &mut self.gas_tracker,
-                self.gas_params.warm_storage_read_cost(),
-            )?;
+            deduct_gas(&mut self.gas_tracker, self.gas_params.warm_storage_read_cost())?;
         }
 
         // dynamic gas
@@ -203,10 +184,7 @@ impl<'a> PrecompileStorageProvider for EvmPrecompileStorageProvider<'a> {
         }
 
         // dynamic gas
-        self.deduct_gas(
-            self.gas_params
-                .sstore_dynamic_gas(true, &result.data, result.is_cold),
-        )?;
+        self.deduct_gas(self.gas_params.sstore_dynamic_gas(true, &result.data, result.is_cold))?;
 
         // Track state gas (cold SSTORE zero->non-zero only)
         self.deduct_state_gas(self.gas_params.sstore_state_gas(&result.data))?;
@@ -233,15 +211,10 @@ impl<'a> PrecompileStorageProvider for EvmPrecompileStorageProvider<'a> {
     fn emit_event(&mut self, address: Address, event: LogData) -> Result<(), TempoPrecompileError> {
         self.deduct_gas(
             gas::LOG
-                + self
-                    .gas_params
-                    .log_cost(event.topics().len() as u8, event.data.len() as u64),
+                + self.gas_params.log_cost(event.topics().len() as u8, event.data.len() as u64),
         )?;
 
-        self.internals.log(Log {
-            address,
-            data: event,
-        });
+        self.internals.log(Log { address, data: event });
 
         Ok(())
     }
@@ -407,9 +380,8 @@ pub fn deduct_gas(
 // `HashMapStorageProvider` instead.
 #[cfg(all(test, feature = "evm-bridge-tests"))]
 mod tests {
-    use super::*;
-    use alloy_primitives::{B256, b256, bytes, keccak256};
     use alloy_evm::{EvmEnv, EvmFactory, EvmInternals, revm::context::Host};
+    use alloy_primitives::{B256, b256, bytes, keccak256};
     use alloy_signer::SignerSync;
     use alloy_signer_local::PrivateKeySigner;
     use revm::{
@@ -419,6 +391,8 @@ mod tests {
     use tempo_chainspec::hardfork::TempoHardfork;
     use tempo_evm::{TempoEvmFactory, evm::TempoEvm};
     use tempo_revm::gas_params::tempo_gas_params_with_amsterdam;
+
+    use super::*;
 
     struct TestEvm(TempoEvm<CacheDB<EmptyDB>>);
 
@@ -443,13 +417,10 @@ mod tests {
             cfg.enable_amsterdam_eip8037 = amsterdam_eip8037_enabled;
             cfg.gas_params = tempo_gas_params_with_amsterdam(spec, amsterdam_eip8037_enabled);
 
-            Self(TempoEvmFactory::default().create_evm(
-                db,
-                EvmEnv {
-                    cfg_env: cfg,
-                    ..Default::default()
-                },
-            ))
+            Self(
+                TempoEvmFactory::default()
+                    .create_evm(db, EvmEnv { cfg_env: cfg, ..Default::default() }),
+            )
         }
 
         fn provider_with_gas_limit(
@@ -735,10 +706,7 @@ mod tests {
         let mut provider = evm.provider_max_gas();
 
         // 1 word: KECCAK256(30) + KECCAK256WORD(6) * ceil(11/32) = 36
-        assert_eq!(
-            provider.keccak256(b"hello world")?,
-            keccak256(b"hello world")
-        );
+        assert_eq!(provider.keccak256(b"hello world")?, keccak256(b"hello world"));
         assert_eq!(provider.gas_used(), 36);
         // 2 words: 30 + 6*2 = 42, cumulative = 78
         provider.keccak256(&[0u8; 64])?;
@@ -747,10 +715,7 @@ mod tests {
 
         // OOG: 30 gas is not enough (needs 36 for 1 word)
         let mut provider = evm.provider_with_gas_limit(30, 0);
-        assert!(matches!(
-            provider.keccak256(b"hello"),
-            Err(TempoPrecompileError::OutOfGas)
-        ));
+        assert!(matches!(provider.keccak256(b"hello"), Err(TempoPrecompileError::OutOfGas)));
 
         Ok(())
     }
@@ -768,18 +733,11 @@ mod tests {
         let s: B256 = sig.s().into();
 
         // Invalid v → None, gas still charged
-        assert!(
-            provider
-                .recover_signer(B256::ZERO, 0, B256::ZERO, B256::ZERO)?
-                .is_none()
-        );
+        assert!(provider.recover_signer(B256::ZERO, 0, B256::ZERO, B256::ZERO)?.is_none());
         assert_eq!(provider.gas_used(), crate::ECRECOVER_GAS);
 
         // Valid signature → correct recovery
-        assert_eq!(
-            provider.recover_signer(digest, v, r, s)?,
-            Some(signer.address())
-        );
+        assert_eq!(provider.recover_signer(digest, v, r, s)?, Some(signer.address()));
         assert_eq!(provider.gas_used(), crate::ECRECOVER_GAS * 2);
         std::mem::drop(provider);
 
@@ -803,25 +761,15 @@ mod tests {
 
         // SLOADs should not add state gas
         provider.sload(address, slot)?;
-        assert_eq!(
-            provider.state_gas_used(),
-            0,
-            "SLOAD should not add state gas"
-        );
+        assert_eq!(provider.state_gas_used(), 0, "SLOAD should not add state gas");
         assert!(provider.gas_used() > 0, "SLOAD should consume regular gas");
 
         // SSTORE zero->non-zero should add state gas
         let gas_before = provider.gas_used();
         provider.sstore(address, slot, U256::from(1))?;
         let state_gas_after_set = provider.state_gas_used();
-        assert_eq!(
-            state_gas_after_set, 230_000,
-            "SSTORE zero->non-zero should add 230k state gas"
-        );
-        assert!(
-            provider.gas_used() > gas_before,
-            "SSTORE should consume gas"
-        );
+        assert_eq!(state_gas_after_set, 230_000, "SSTORE zero->non-zero should add 230k state gas");
+        assert!(provider.gas_used() > gas_before, "SSTORE should consume gas");
 
         // SSTORE non-zero->non-zero should NOT add more state gas
         provider.sstore(address, slot, U256::from(2))?;
@@ -833,10 +781,7 @@ mod tests {
 
         // Code deposit should add state gas (2,300 per byte)
         let state_gas_before_code = provider.state_gas_used();
-        provider.set_code(
-            code_address,
-            revm::state::Bytecode::new_raw(vec![0xef].into()),
-        )?;
+        provider.set_code(code_address, revm::state::Bytecode::new_raw(vec![0xef].into()))?;
         assert_eq!(
             provider.state_gas_used(),
             state_gas_before_code
@@ -901,11 +846,7 @@ mod tests {
             3 * state_gas_per_sstore,
             "three SSTOREs should consume 690k state gas total"
         );
-        assert_eq!(
-            provider.reservoir(),
-            0,
-            "reservoir should be fully exhausted"
-        );
+        assert_eq!(provider.reservoir(), 0, "reservoir should be fully exhausted");
 
         // Regular gas increase = normal sstore cost + spill from reservoir
         let spill = state_gas_per_sstore - remaining_reservoir; // 230k - 40k = 190k
@@ -1081,10 +1022,7 @@ mod tests {
         assert!(gas_after_sstore > initial_gas, "sstore should consume gas");
 
         assert_eq!(provider.sload(address, key)?, value);
-        assert!(
-            provider.gas_used() > gas_after_sstore,
-            "sload should consume additional gas"
-        );
+        assert!(provider.gas_used() > gas_after_sstore, "sload should consume additional gas");
         Ok(())
     }
 
@@ -1111,10 +1049,7 @@ mod tests {
         let initial_gas = provider.gas_used();
 
         assert_eq!(provider.sload(address, key)?, value);
-        assert!(
-            provider.gas_used() > initial_gas,
-            "sload should consume gas"
-        );
+        assert!(provider.gas_used() > initial_gas, "sload should consume gas");
         Ok(())
     }
 
@@ -1136,10 +1071,7 @@ mod tests {
         })?;
 
         assert_eq!(retrieved_nonce, 0);
-        assert!(
-            provider.gas_used() > initial_gas,
-            "with_account_info should consume gas"
-        );
+        assert!(provider.gas_used() > initial_gas, "with_account_info should consume gas");
         Ok(())
     }
 
@@ -1161,18 +1093,12 @@ mod tests {
         for i in 0..3 {
             provider.sstore(address, U256::from(i), U256::from(i * 1000))?;
             let current_gas = provider.gas_used();
-            assert!(
-                current_gas > prev_gas,
-                "each sstore should increase gas usage"
-            );
+            assert!(current_gas > prev_gas, "each sstore should increase gas usage");
             prev_gas = current_gas;
         }
 
         for i in 0..3 {
-            assert_eq!(
-                provider.sload(address, U256::from(i))?,
-                U256::from(i * 1000)
-            );
+            assert_eq!(provider.sload(address, U256::from(i))?, U256::from(i * 1000));
         }
         Ok(())
     }

@@ -218,11 +218,7 @@ fn derive_unit_enum_impl(input: &DeriveInput, data_enum: &DataEnum) -> syn::Resu
     validate_sequential_discriminants(data_enum)?;
 
     let enum_name = &input.ident;
-    let variant_names: Vec<_> = data_enum
-        .variants
-        .iter()
-        .map(|variant| &variant.ident)
-        .collect();
+    let variant_names: Vec<_> = data_enum.variants.iter().map(|variant| &variant.ident).collect();
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
 
     Ok(quote! {
@@ -649,8 +645,9 @@ fn gen_delete_impl(fields: &[(&Ident, &Type)], packing: &Ident) -> TokenStream {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use syn::parse_quote;
+
+    use super::*;
 
     fn parse_enum(input: DeriveInput) -> DataEnum {
         match input.data {

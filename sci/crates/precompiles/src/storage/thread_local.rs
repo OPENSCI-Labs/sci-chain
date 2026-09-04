@@ -1,6 +1,8 @@
+use std::{cell::RefCell, fmt::Debug};
+
+use alloy_evm::{Database, EvmInternals};
 use alloy_primitives::{Address, B256, Bytes, LogData, U256};
 use alloy_sol_types::SolInterface;
-use alloy_evm::{Database, EvmInternals};
 use revm::{
     context::{
         Block, CfgEnv, ContextTr, JournalTr, Transaction, journaled_state::JournalCheckpoint,
@@ -9,7 +11,6 @@ use revm::{
     state::{AccountInfo, Bytecode},
 };
 use scoped_tls::scoped_thread_local;
-use std::{cell::RefCell, fmt::Debug};
 use tempo_chainspec::hardfork::TempoHardfork;
 
 use crate::{
@@ -66,10 +67,7 @@ impl StorageCtx {
     where
         F: FnOnce(&mut dyn PrecompileStorageProvider) -> R,
     {
-        assert!(
-            STORAGE.is_set(),
-            "No storage context. 'StorageCtx::enter' must be called first"
-        );
+        assert!(STORAGE.is_set(), "No storage context. 'StorageCtx::enter' must be called first");
         STORAGE.with(|cell| {
             // SAFETY: `scoped_tls` ensures the pointer is only accessible within the closure scope.
             // Holding the guard prevents re-entrant borrows.
@@ -222,13 +220,8 @@ impl StorageCtx {
     /// Panics if no storage context is set.
     pub fn checkpoint(&mut self) -> CheckpointGuard {
         // spec: only available +T1C. Prior to that checkpoints are a no-op.
-        let checkpoint = Self::with_storage(|s| {
-            if s.spec().is_t1c() {
-                Some(s.checkpoint())
-            } else {
-                None
-            }
-        });
+        let checkpoint =
+            Self::with_storage(|s| if s.spec().is_t1c() { Some(s.checkpoint()) } else { None });
 
         CheckpointGuard { checkpoint }
     }
@@ -282,9 +275,7 @@ impl StorageCtx {
 
     /// Returns a [`PrecompileResult`] constructed from the given [`TempoPrecompileError`].
     pub fn error_result(&self, error: impl Into<TempoPrecompileError>) -> PrecompileResult {
-        error
-            .into()
-            .into_precompile_result(self.gas_used(), self.reservoir())
+        error.into().into_precompile_result(self.gas_used(), self.reservoir())
     }
 }
 
@@ -494,9 +485,10 @@ unsafe fn extend_lifetime_mut<'b, T: ?Sized>(r: &mut T) -> &'b mut T {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use alloy_primitives::U256;
     use tempo_chainspec::hardfork::TempoHardfork;
+
+    use super::*;
 
     fn t1c_storage() -> HashMapStorageProvider {
         HashMapStorageProvider::new_with_spec(1, TempoHardfork::T1C)

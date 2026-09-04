@@ -18,12 +18,14 @@ pub use set::{Set, SetHandler};
 pub mod bytes_like;
 mod primitives;
 
+use std::{cell::RefCell, collections::HashMap, hash::Hash};
+
+use alloy_primitives::{Address, U256, keccak256};
+
 use crate::{
     error::Result,
     storage::{StorageOps, packing},
 };
-use alloy_primitives::{Address, U256, keccak256};
-use std::{cell::RefCell, collections::HashMap, hash::Hash};
 
 /// Describes how a type is laid out in EVM storage.
 ///
@@ -129,11 +131,7 @@ impl LayoutCtx {
     /// Get the packed offset, returns `None` for `FULL` and `INIT`
     #[inline]
     pub const fn packed_offset(&self) -> Option<usize> {
-        if self.0 >= usize::MAX - 1 {
-            None
-        } else {
-            Some(self.0)
-        }
+        if self.0 >= usize::MAX - 1 { None } else { Some(self.0) }
     }
 
     /// Returns `true` if this context signals the tail doesn't need to be cleared.
@@ -385,9 +383,7 @@ impl<K, H> HandlerCache<K, H> {
     /// Creates a new empty handler cache.
     #[inline]
     pub(super) fn new() -> Self {
-        Self {
-            inner: RefCell::new(HashMap::new()),
-        }
+        Self { inner: RefCell::new(HashMap::new()) }
     }
 }
 

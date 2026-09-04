@@ -11,12 +11,14 @@
 //! - Base slot: stores `length * 2 + 1` (bit 0 = 1 indicates long string)
 //! - Data slots: stored at `keccak256(main_slot) + i` for each 32-byte chunk
 
+use std::marker::PhantomData;
+
+use alloy_primitives::{Address, Bytes, U256, keccak256};
+
 use crate::{
     error::{Result, TempoPrecompileError},
     storage::{StorageCtx, StorageOps, types::*},
 };
-use alloy_primitives::{Address, Bytes, U256, keccak256};
-use std::marker::PhantomData;
 
 impl StorableType for Bytes {
     const LAYOUT: Layout = Layout::Slots(1);
@@ -52,11 +54,7 @@ impl<T: Storable> BytesLikeHandler<T> {
     /// Creates a new handler for the bytes-like value at the given base slot.
     #[inline]
     pub fn new(base_slot: U256, address: Address) -> Self {
-        Self {
-            base_slot,
-            address,
-            _ty: PhantomData,
-        }
+        Self { base_slot, address, _ty: PhantomData }
     }
 
     #[inline]
@@ -184,11 +182,7 @@ where
             let chunk_bytes = chunk_value.to_be_bytes::<32>();
 
             // For the last chunk, only take the remaining bytes
-            let bytes_to_take = if i == chunks - 1 {
-                length - (i * 32)
-            } else {
-                32
-            };
+            let bytes_to_take = if i == chunks - 1 { length - (i * 32) } else { 32 };
             data.extend_from_slice(&chunk_bytes[..bytes_to_take]);
         }
 
@@ -355,12 +349,13 @@ fn encode_long_string_length(byte_length: usize) -> U256 {
 
 #[cfg(test)]
 mod tests {
+    use proptest::prelude::*;
+
     use super::*;
     use crate::{
         storage::{Handler, StorageCtx},
         test_util::setup_storage,
     };
-    use proptest::prelude::*;
 
     // Strategy for generating random U256 slot values that won't overflow
     fn arb_safe_slot() -> impl Strategy<Value = U256> {
@@ -422,27 +417,18 @@ mod tests {
         // Manual computation
         let expected = U256::from_be_bytes(keccak256(base_slot.to_be_bytes::<32>()).0);
 
-        assert_eq!(
-            data_slot, expected,
-            "calc_data_slot should match manual keccak256 computation"
-        );
+        assert_eq!(data_slot, expected, "calc_data_slot should match manual keccak256 computation");
     }
 
     #[test]
     fn test_is_long_string_boundaries() {
         // Short string (31 bytes): length * 2 = 62 (0x3E), bit 0 = 0
         let short_31_bytes = encode_short_string(&[b'a'; 31]);
-        assert!(
-            !is_long_string(short_31_bytes),
-            "31-byte string should be short"
-        );
+        assert!(!is_long_string(short_31_bytes), "31-byte string should be short");
 
         // Long string (32 bytes): length * 2 + 1 = 65 (0x41), bit 0 = 1
         let long_32_bytes = encode_long_string_length(32);
-        assert!(
-            is_long_string(long_32_bytes),
-            "32-byte string should be long"
-        );
+        assert!(is_long_string(long_32_bytes), "32-byte string should be long");
 
         // Edge case: empty string
         let empty = encode_short_string(&[]);
@@ -460,11 +446,7 @@ mod tests {
             let bytes = vec![b'a'; len];
             let encoded = encode_short_string(&bytes);
             let decoded_len = calc_string_length(encoded, false);
-            assert_eq!(
-                decoded_len,
-                Ok(len),
-                "Short string length mismatch for {len} bytes"
-            );
+            assert_eq!(decoded_len, Ok(len), "Short string length mismatch for {len} bytes");
         }
     }
 
@@ -474,11 +456,7 @@ mod tests {
         for len in [32, 33, 63, 64, 65, 100, 1000, 10000] {
             let encoded = encode_long_string_length(len);
             let decoded_len = calc_string_length(encoded, true);
-            assert_eq!(
-                decoded_len,
-                Ok(len),
-                "Long string length mismatch for {len} bytes"
-            );
+            assert_eq!(decoded_len, Ok(len), "Long string length mismatch for {len} bytes");
         }
     }
 
@@ -507,11 +485,7 @@ mod tests {
         assert_eq!(&bytes[5..31], &[0u8; 26], "Padding should be zero");
 
         // Verify LSB contains length * 2
-        assert_eq!(
-            bytes[31],
-            (test_str.len() * 2) as u8,
-            "LSB should be length * 2"
-        );
+        assert_eq!(bytes[31], (test_str.len() * 2) as u8, "LSB should be length * 2");
 
         // Verify bit 0 is 0 (short string marker)
         assert_eq!(bytes[31] & 1, 0, "Bit 0 should be 0 for short strings");
@@ -531,10 +505,7 @@ mod tests {
         for len in [32, 33, 100, 1000, 10000] {
             let encoded = encode_long_string_length(len);
             let expected = U256::from(len * 2 + 1);
-            assert_eq!(
-                encoded, expected,
-                "Long string length encoding mismatch for {len} bytes"
-            );
+            assert_eq!(encoded, expected, "Long string length encoding mismatch for {len} bytes");
 
             // Verify bit 0 is 1 (long string marker)
             assert_eq!(encoded.byte(0) & 1, 1, "Bit 0 should be 1 for long strings");
@@ -548,22 +519,14 @@ mod tests {
             let bytes = vec![b'x'; len];
             let encoded = encode_short_string(&bytes);
             let decoded_len = calc_string_length(encoded, false);
-            assert_eq!(
-                decoded_len,
-                Ok(len),
-                "Short string roundtrip failed for {len} bytes"
-            );
+            assert_eq!(decoded_len, Ok(len), "Short string roundtrip failed for {len} bytes");
         }
 
         // Long strings roundtrip
         for len in [32, 33, 64, 100] {
             let encoded = encode_long_string_length(len);
             let decoded_len = calc_string_length(encoded, true);
-            assert_eq!(
-                decoded_len,
-                Ok(len),
-                "Long string roundtrip failed for {len} bytes"
-            );
+            assert_eq!(decoded_len, Ok(len), "Long string roundtrip failed for {len} bytes");
         }
     }
 

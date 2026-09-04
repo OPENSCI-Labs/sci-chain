@@ -103,21 +103,12 @@ pub(crate) fn allocate_slots(fields: &[FieldInfo]) -> syn::Result<Vec<LayoutFiel
         } else if let Some(new_base) = field.base_slot {
             // Explicit base slot, resets auto-assignment chain
             current_base_slot = new_base;
-            SlotAssignment::Auto {
-                base_slot: new_base,
-            }
+            SlotAssignment::Auto { base_slot: new_base }
         } else {
-            SlotAssignment::Auto {
-                base_slot: current_base_slot,
-            }
+            SlotAssignment::Auto { base_slot: current_base_slot }
         };
 
-        result.push(LayoutField {
-            name: &field.name,
-            ty: &field.ty,
-            kind,
-            assigned_slot,
-        });
+        result.push(LayoutField { name: &field.name, ty: &field.ty, kind, assigned_slot });
     }
 
     Ok(result)
@@ -229,10 +220,7 @@ pub(crate) fn classify_field_type(ty: &Type) -> syn::Result<FieldKind<'_>> {
 
     // Check if it's a mapping (mappings have fundamentally different API)
     if let Some((key_ty, value_ty)) = extract_mapping_types(ty) {
-        return Ok(FieldKind::Mapping {
-            key: key_ty,
-            value: value_ty,
-        });
+        return Ok(FieldKind::Mapping { key: key_ty, value: value_ty });
     }
 
     // All non-mapping fields use the same accessor pattern
@@ -456,9 +444,10 @@ pub(crate) fn gen_collision_check_fn(
 
 #[cfg(test)]
 mod tests {
+    use syn::parse_quote;
+
     use super::*;
     use crate::utils::extract_mapping_types;
-    use syn::parse_quote;
 
     fn field(name: &str, ty: Type, slot: Option<u64>, base_slot: Option<u64>) -> FieldInfo {
         FieldInfo {
@@ -587,16 +576,10 @@ mod tests {
     #[test]
     fn classify_field_type_variations() {
         let assert_direct = |ty: Type| {
-            assert!(matches!(
-                classify_field_type(&ty).unwrap(),
-                FieldKind::Direct(_)
-            ));
+            assert!(matches!(classify_field_type(&ty).unwrap(), FieldKind::Direct(_)));
         };
         let assert_mapping = |ty: Type| {
-            assert!(matches!(
-                classify_field_type(&ty).unwrap(),
-                FieldKind::Mapping { .. }
-            ));
+            assert!(matches!(classify_field_type(&ty).unwrap(), FieldKind::Mapping { .. }));
         };
 
         // primitive → Direct
@@ -657,28 +640,13 @@ mod tests {
         // Manual: typical, zero, large
         assert_ref_slot(SlotAssignment::Manual(U256::from(42)), U256::from(42));
         assert_ref_slot(SlotAssignment::Manual(U256::ZERO), U256::ZERO);
-        assert_ref_slot(
-            SlotAssignment::Manual(U256::from(u64::MAX)),
-            U256::from(u64::MAX),
-        );
+        assert_ref_slot(SlotAssignment::Manual(U256::from(u64::MAX)), U256::from(u64::MAX));
 
         // Auto: typical, zero, large
+        assert_ref_slot(SlotAssignment::Auto { base_slot: U256::from(7) }, U256::from(7));
+        assert_ref_slot(SlotAssignment::Auto { base_slot: U256::ZERO }, U256::ZERO);
         assert_ref_slot(
-            SlotAssignment::Auto {
-                base_slot: U256::from(7),
-            },
-            U256::from(7),
-        );
-        assert_ref_slot(
-            SlotAssignment::Auto {
-                base_slot: U256::ZERO,
-            },
-            U256::ZERO,
-        );
-        assert_ref_slot(
-            SlotAssignment::Auto {
-                base_slot: U256::from(u64::MAX),
-            },
+            SlotAssignment::Auto { base_slot: U256::from(u64::MAX) },
             U256::from(u64::MAX),
         );
     }

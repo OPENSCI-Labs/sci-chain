@@ -7,12 +7,11 @@
 //! `untrip` here. Read-side consumers (the pre-execution hook, the delegator) call
 //! `isTripped` directly on this precompile.
 
-use alloy_primitives::{Address, address};
-
 pub use ISciAgentState::{
     ISciAgentStateErrors as SciAgentStateError, ISciAgentStateEvents as SciAgentStateEvent,
     isTrippedCall, tripKeyCall, untripKeyCall,
 };
+use alloy_primitives::{Address, address};
 
 crate::sol! {
     /// SCI agent state precompile interface.
@@ -58,8 +57,7 @@ impl SciAgentStateError {
 }
 
 /// `SciAgentState` precompile address — sibling to `ACCOUNT_KEYCHAIN_ADDRESS` (`...0000`).
-pub const SCI_AGENT_STATE_ADDRESS: Address =
-    address!("0xAAAAAAAA00000000000000000000000000000001");
+pub const SCI_AGENT_STATE_ADDRESS: Address = address!("0xAAAAAAAA00000000000000000000000000000001");
 
 /// Address of the Solidity `AgentCircuitBreaker.sol` predeploy. The only address allowed
 /// to call `tripKey` / `untripKey` on `SciAgentState`.

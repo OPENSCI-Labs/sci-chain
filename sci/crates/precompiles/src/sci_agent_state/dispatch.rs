@@ -1,12 +1,13 @@
 //! ABI dispatch for the [`SciAgentState`] precompile.
 
-use super::SciAgentState;
-use crate::{Precompile, SelectorSchedule, charge_input_cost, dispatch_call, mutate_void, view};
 use alloy_primitives::Address;
 use alloy_sol_types::SolInterface;
 use revm::precompile::PrecompileResult;
 use tempo_chainspec::hardfork::TempoHardfork;
 use tempo_contracts::precompiles::ISciAgentState::ISciAgentStateCalls;
+
+use super::SciAgentState;
+use crate::{Precompile, SelectorSchedule, charge_input_cost, dispatch_call, mutate_void, view};
 
 impl Precompile for SciAgentState {
     fn call(&mut self, calldata: &[u8], msg_sender: Address) -> PrecompileResult {
@@ -35,12 +36,13 @@ impl Precompile for SciAgentState {
 
 #[cfg(test)]
 mod tests {
+    use tempo_chainspec::hardfork::TempoHardfork;
+
     use super::*;
     use crate::{
         storage::{StorageCtx, hashmap::HashMapStorageProvider},
         test_util::{assert_full_coverage, check_selector_coverage},
     };
-    use tempo_chainspec::hardfork::TempoHardfork;
 
     #[test]
     fn sci_agent_state_selector_coverage() -> eyre::Result<()> {

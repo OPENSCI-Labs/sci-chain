@@ -1,9 +1,10 @@
+use std::collections::HashMap;
+
 use alloy_primitives::{Address, LogData, U256};
 use revm::{
     context::journaled_state::JournalCheckpoint,
     state::{AccountInfo, Bytecode},
 };
-use std::collections::HashMap;
 use tempo_chainspec::hardfork::TempoHardfork;
 
 use crate::{error::TempoPrecompileError, storage::PrecompileStorageProvider};
@@ -151,19 +152,11 @@ impl PrecompileStorageProvider for HashMapStorageProvider {
         }
 
         self.counter_sload += 1;
-        Ok(self
-            .internals
-            .get(&(address, key))
-            .copied()
-            .unwrap_or(U256::ZERO))
+        Ok(self.internals.get(&(address, key)).copied().unwrap_or(U256::ZERO))
     }
 
     fn tload(&mut self, address: Address, key: U256) -> Result<U256, TempoPrecompileError> {
-        Ok(self
-            .transient
-            .get(&(address, key))
-            .copied()
-            .unwrap_or(U256::ZERO))
+        Ok(self.transient.get(&(address, key)).copied().unwrap_or(U256::ZERO))
     }
 
     fn deduct_gas(&mut self, _gas: u64) -> Result<(), TempoPrecompileError> {
@@ -208,19 +201,14 @@ impl PrecompileStorageProvider for HashMapStorageProvider {
 
     fn checkpoint(&mut self) -> JournalCheckpoint {
         let idx = self.snapshots.len();
-        self.snapshots.push(Snapshot {
-            internals: self.internals.clone(),
-            events: self.events.clone(),
-        });
+        self.snapshots
+            .push(Snapshot { internals: self.internals.clone(), events: self.events.clone() });
         // SCI patch — revm 34's `JournalCheckpoint` lacks the `selfdestructed_i`
         // field that v1.7.1 adds (it was introduced alongside EIP-8037
         // bookkeeping). Verbatim Tempo source initialises the field to 0; we
         // omit it here because revm 34 has no such field. Re-apply on every
         // Tempo sync.
-        JournalCheckpoint {
-            log_i: 0,
-            journal_i: idx,
-        }
+        JournalCheckpoint { log_i: 0, journal_i: idx }
     }
 
     fn checkpoint_commit(&mut self, checkpoint: JournalCheckpoint) {
@@ -295,11 +283,7 @@ impl HashMapStorageProvider {
 
     /// Clears all emitted events for the given address.
     pub fn clear_events(&mut self, address: Address) {
-        let _ = self
-            .events
-            .entry(address)
-            .and_modify(|v| v.clear())
-            .or_default();
+        let _ = self.events.entry(address).and_modify(|v| v.clear()).or_default();
     }
 
     /// Returns the amount of counted SLOADs.
@@ -320,8 +304,6 @@ impl HashMapStorageProvider {
 
     /// Returns all storage entries as `(address, slot, value)`.
     pub fn into_storage(self) -> impl Iterator<Item = (Address, U256, U256)> {
-        self.internals
-            .into_iter()
-            .map(|((addr, slot), value)| (addr, slot, value))
+        self.internals.into_iter().map(|((addr, slot), value)| (addr, slot, value))
     }
 }

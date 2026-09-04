@@ -41,8 +41,8 @@ fn main() {
         std::process::exit(2);
     }
 
-    let signer = PrivateKeySigner::from_str(args[1].trim_start_matches("0x"))
-        .expect("invalid private key");
+    let signer =
+        PrivateKeySigner::from_str(args[1].trim_start_matches("0x")).expect("invalid private key");
     let chain_id: u64 = args[2].parse().expect("invalid chain_id");
     let nonce: u64 = args[3].parse().expect("invalid nonce");
     let to = Address::from_str(&args[4]).expect("invalid to address");
@@ -61,13 +61,10 @@ fn main() {
         calls.push(Call { to: TxKind::Call(call2), value: call2_value, input: Bytes::new() });
     }
 
-    let fee_payer = env::var("FEE_PAYER")
-        .ok()
-        .map(|a| Address::from_str(&a).expect("invalid FEE_PAYER"));
+    let fee_payer =
+        env::var("FEE_PAYER").ok().map(|a| Address::from_str(&a).expect("invalid FEE_PAYER"));
 
-    let root = env::var("ROOT")
-        .ok()
-        .map(|a| Address::from_str(&a).expect("invalid ROOT"));
+    let root = env::var("ROOT").ok().map(|a| Address::from_str(&a).expect("invalid ROOT"));
 
     let tx = BaseAaTransaction {
         chain_id,
@@ -81,8 +78,7 @@ fn main() {
         root,
     };
 
-    let signature =
-        signer.sign_hash_sync(&tx.signature_hash()).expect("signing failed");
+    let signature = signer.sign_hash_sync(&tx.signature_hash()).expect("signing failed");
     let envelope = BaseTxEnvelope::Aa(Signed::new_unhashed(tx, signature));
 
     let mut raw = Vec::new();
