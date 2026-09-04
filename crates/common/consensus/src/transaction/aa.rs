@@ -1,9 +1,9 @@
-//! SCI account-abstraction (AA) transaction type — Plan A PoC.
+//! SCI account-abstraction (AA) transaction type — Plan A `PoC`.
 //!
 //! A minimal native agent transaction tagged with type id `0x76` (matching Tempo's AA
 //! tx tag). It carries a batch of [`Call`]s and an optional `fee_payer` (the Plan A
 //! "sponsored gas" field: gas can be charged to the fee payer / root rather than the
-//! sending session key). This PoC is intentionally minimal — it does NOT yet carry the
+//! sending session key). This `PoC` is intentionally minimal — it does NOT yet carry the
 //! keychain signature, 2D nonce, validity windows, or authorization list that the full
 //! Tempo AA tx has (those land in Phase 1). It is signed with a standard secp256k1
 //! [`Signature`] so it can ride the existing envelope/signing plumbing while we validate
@@ -44,7 +44,7 @@ impl Call {
     }
 }
 
-/// SCI account-abstraction transaction (PoC, type `0x76`).
+/// SCI account-abstraction transaction (`PoC`, type `0x76`).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -94,7 +94,7 @@ impl BaseAaTransaction {
             + self.access_list.size()
     }
 
-    /// PoC helper: approximate this AA transaction as an EIP-1559 transaction that
+    /// `PoC` helper: approximate this AA transaction as an EIP-1559 transaction that
     /// executes only its first call. Used to reuse the existing `TxEnv` /
     /// `TransactionRequest` conversions until the Tempo batch handler lands (Phase 2).
     /// Drops `fee_payer` and any calls beyond the first — single-call execution only.
@@ -286,7 +286,7 @@ impl SignableTransaction<Signature> for BaseAaTransaction {
 
 impl InMemorySize for BaseAaTransaction {
     fn size(&self) -> usize {
-        BaseAaTransaction::size(self)
+        Self::size(self)
     }
 }
 

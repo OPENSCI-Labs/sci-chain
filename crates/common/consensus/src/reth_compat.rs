@@ -573,9 +573,8 @@ impl From<CompactBaseReceipt<'_>> for BaseReceipt {
         match tx_type {
             OpTxType::Legacy => Self::Legacy(inner),
             OpTxType::Eip2930 => Self::Eip2930(inner),
-            OpTxType::Eip1559 => Self::Eip1559(inner),
+            OpTxType::Eip1559 | OpTxType::Aa => Self::Eip1559(inner),
             OpTxType::Eip7702 => Self::Eip7702(inner),
-            OpTxType::Aa => Self::Eip1559(inner),
             OpTxType::Deposit => {
                 Self::Deposit(DepositReceipt { inner, deposit_nonce, deposit_receipt_version })
             }
