@@ -57,7 +57,8 @@ impl BaseReceiptBuilder for AlloyReceiptBuilder {
                 Ok(match ty {
                     OpTxType::Legacy => BaseReceiptEnvelope::Legacy(receipt),
                     OpTxType::Eip2930 => BaseReceiptEnvelope::Eip2930(receipt),
-                    OpTxType::Eip1559 => BaseReceiptEnvelope::Eip1559(receipt),
+                    // AA tx receipts are represented as EIP-1559 receipts.
+                    OpTxType::Eip1559 | OpTxType::Aa => BaseReceiptEnvelope::Eip1559(receipt),
                     OpTxType::Eip7702 => BaseReceiptEnvelope::Eip7702(receipt),
                     OpTxType::Deposit => unreachable!(),
                 })

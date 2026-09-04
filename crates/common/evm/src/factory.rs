@@ -15,7 +15,8 @@ use crate::{
 ///
 /// [`BasePrecompiles`] are eagerly flattened into a [`PrecompilesMap`] on construction
 /// so that precompile dispatch is a single hash-map lookup rather than a spec-aware
-/// branch on every call.
+/// branch on every call. SCI's keychain precompiles are installed on top via
+/// [`sci_precompiles::install`].
 #[derive(Debug, Default, Clone, Copy)]
 #[non_exhaustive]
 pub struct BaseEvmFactory;
@@ -37,15 +38,16 @@ impl EvmFactory for BaseEvmFactory {
         input: EvmEnv<BaseSpecId>,
     ) -> Self::Evm<DB, NoOpInspector> {
         let spec_id = input.cfg_env.spec;
+        let mut precompiles =
+            PrecompilesMap::from_static(BasePrecompiles::new_with_spec(spec_id).precompiles());
+        sci_precompiles::install(&mut precompiles, &input.cfg_env);
         Context::base()
             .with_db(db)
             .with_block(input.block_env)
             .with_cfg(input.cfg_env)
             .build_base()
             .with_inspector(NoOpInspector {})
-            .with_precompiles(PrecompilesMap::from_static(
-                BasePrecompiles::new_with_spec(spec_id).precompiles(),
-            ))
+            .with_precompiles(precompiles)
     }
 
     fn create_evm_with_inspector<DB: Database, I: Inspector<Self::Context<DB>>>(
@@ -55,13 +57,14 @@ impl EvmFactory for BaseEvmFactory {
         inspector: I,
     ) -> Self::Evm<DB, I> {
         let spec_id = input.cfg_env.spec;
+        let mut precompiles =
+            PrecompilesMap::from_static(BasePrecompiles::new_with_spec(spec_id).precompiles());
+        sci_precompiles::install(&mut precompiles, &input.cfg_env);
         Context::base()
             .with_db(db)
             .with_block(input.block_env)
             .with_cfg(input.cfg_env)
             .build_with_inspector(inspector)
-            .with_precompiles(PrecompilesMap::from_static(
-                BasePrecompiles::new_with_spec(spec_id).precompiles(),
-            ))
+            .with_precompiles(precompiles)
     }
 }

@@ -10,9 +10,17 @@ use crate::{BaseSpecId, BaseTransactionError, L1BlockInfo, transaction::BaseTxTr
 ///
 /// Satisfied by [`crate::BaseContext`] for any database, binding the transaction type to
 /// [`BaseTxTr`], the spec to [`BaseSpecId`], and the chain extension to [`L1BlockInfo`].
+///
+/// **SCI patch**: the `Db: alloy_evm::Database` and `Journal: ... + core::fmt::Debug`
+/// bounds were added on the SCI fork. They are required by `SciHandler`'s pre-execution
+/// hook, which constructs an `alloy_evm::EvmInternals` (whose `new` constructor needs the
+/// journal to be Debug). All concrete `BaseContext<DB>` instances Base actually uses
+/// (`State<...>`, `InMemoryDB`, `EmptyDB`) satisfy these, so adding the bounds here is
+/// non-breaking for upstream Base callers in practice.
 pub trait BaseContextTr:
     ContextTr<
-        Journal: JournalTr<State = EvmState>,
+        Db: alloy_evm::Database,
+        Journal: JournalTr<State = EvmState, Database: alloy_evm::Database> + core::fmt::Debug,
         Tx: BaseTxTr,
         Cfg: Cfg<Spec = BaseSpecId>,
         Chain = L1BlockInfo,
@@ -22,7 +30,8 @@ pub trait BaseContextTr:
 
 impl<T> BaseContextTr for T where
     T: ContextTr<
-            Journal: JournalTr<State = EvmState>,
+            Db: alloy_evm::Database,
+            Journal: JournalTr<State = EvmState, Database: alloy_evm::Database> + core::fmt::Debug,
             Tx: BaseTxTr,
             Cfg: Cfg<Spec = BaseSpecId>,
             Chain = L1BlockInfo,

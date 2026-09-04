@@ -1,10 +1,10 @@
 //! Base transaction abstraction containing the `[BaseTxTr]` trait and corresponding `[BaseTransaction]` type.
 
-use alloc::vec;
+use alloc::{vec, vec::Vec};
 
 use alloy_eips::Encodable2718;
 use alloy_evm::{FromRecoveredTx, FromTxWithEncoded, tx::IntoTxEnv};
-use base_common_consensus::{BaseTxEnvelope, TxDeposit};
+use base_common_consensus::{BaseTxEnvelope, Call, TxDeposit};
 use revm::{
     context::TxEnv,
     context_interface::transaction::Transaction,
@@ -28,6 +28,26 @@ pub struct BaseTransaction<T: Transaction> {
     pub enveloped_tx: Option<Bytes>,
     /// Deposit transaction parts.
     pub deposit: DepositTransactionParts,
+    /// SCI account-abstraction (AA) transaction parts (Plan A, type `0x76`).
+    ///
+    /// `Some` iff this env was built from a [`BaseTxEnvelope::Aa`]. The base [`TxEnv`]
+    /// carries only the AA tx's first call (the legacy `PoC` view); this field carries the
+    /// full batch + identity so [`crate::SciHandler`] can run the multi-call executor
+    /// (calls run with `msg.sender == root` when set). `None` for every other tx type.
+    pub aa: Option<AaTransactionParts>,
+}
+
+/// SCI AA transaction parts attached to a [`BaseTransaction`] env.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct AaTransactionParts {
+    /// The atomic batch of calls to execute.
+    pub calls: Vec<Call>,
+    /// Optional root account the calls execute on behalf of (`msg.sender`). `None` means
+    /// execute as the signer.
+    pub root: Option<Address>,
+    /// Optional fee payer (sponsored gas). `None` means the signer pays.
+    pub fee_payer: Option<Address>,
 }
 
 impl<T: Transaction> AsRef<T> for BaseTransaction<T> {
@@ -39,7 +59,7 @@ impl<T: Transaction> AsRef<T> for BaseTransaction<T> {
 impl<T: Transaction> BaseTransaction<T> {
     /// Create a new Base transaction.
     pub fn new(base: T) -> Self {
-        Self { base, enveloped_tx: None, deposit: DepositTransactionParts::default() }
+        Self { base, enveloped_tx: None, deposit: DepositTransactionParts::default(), aa: None }
     }
 }
 
@@ -56,6 +76,7 @@ impl Default for BaseTransaction<TxEnv> {
             base: TxEnv::default(),
             enveloped_tx: Some(vec![0x00].into()),
             deposit: DepositTransactionParts::default(),
+            aa: None,
         }
     }
 }
@@ -168,6 +189,10 @@ impl<T: Transaction> BaseTxTr for BaseTransaction<T> {
         self.enveloped_tx.as_ref()
     }
 
+    fn aa_parts(&self) -> Option<&AaTransactionParts> {
+        self.aa.as_ref()
+    }
+
     fn source_hash(&self) -> Option<B256> {
         if self.tx_type() != DEPOSIT_TRANSACTION_TYPE {
             return None;
@@ -226,22 +251,50 @@ impl FromTxWithEncoded<BaseTxEnvelope> for BaseTransaction<TxEnv> {
                 base: TxEnv::from_recovered_tx(tx.tx(), caller),
                 enveloped_tx: Some(encoded),
                 deposit: Default::default(),
+                aa: None,
             },
             BaseTxEnvelope::Eip1559(tx) => Self {
                 base: TxEnv::from_recovered_tx(tx.tx(), caller),
                 enveloped_tx: Some(encoded),
                 deposit: Default::default(),
+                aa: None,
             },
             BaseTxEnvelope::Eip2930(tx) => Self {
                 base: TxEnv::from_recovered_tx(tx.tx(), caller),
                 enveloped_tx: Some(encoded),
                 deposit: Default::default(),
+                aa: None,
             },
             BaseTxEnvelope::Eip7702(tx) => Self {
                 base: TxEnv::from_recovered_tx(tx.tx(), caller),
                 enveloped_tx: Some(encoded),
                 deposit: Default::default(),
+                aa: None,
             },
+            // The base `TxEnv` carries the AA tx's first call (used by validation +
+            // gas/nonce on the signer); `aa` carries the full batch + identity so
+            // `SciHandler::execution()` runs the multi-call executor (Phase 2 / 2a).
+            BaseTxEnvelope::Aa(tx) => {
+                let aa = tx.tx();
+                let mut base = TxEnv::from_recovered_tx(&aa.to_eip1559_first_call(), caller);
+                // The multi-call executor transfers each call's value from `root` (or the
+                // signer) per-frame, so the base env's value must be 0: otherwise revm's
+                // balance check would require the signer to also hold the first call's
+                // value, and gas (Plan A 2b) is metered separately. Per-call value is still
+                // enforced at execution (a call that can't fund its transfer reverts the
+                // whole atomic batch).
+                base.value = U256::ZERO;
+                Self {
+                    base,
+                    enveloped_tx: Some(encoded),
+                    deposit: Default::default(),
+                    aa: Some(AaTransactionParts {
+                        calls: aa.calls.clone(),
+                        root: aa.root,
+                        fee_payer: aa.fee_payer,
+                    }),
+                }
+            }
             BaseTxEnvelope::Deposit(tx) => Self::from_encoded_tx(tx.inner(), caller, encoded),
         }
     }
@@ -262,7 +315,7 @@ impl FromTxWithEncoded<TxDeposit> for BaseTransaction<TxEnv> {
             mint: Some(tx.mint),
             is_system_transaction: tx.is_system_transaction,
         };
-        Self { base, enveloped_tx: Some(encoded), deposit }
+        Self { base, enveloped_tx: Some(encoded), deposit, aa: None }
     }
 }
 

@@ -4,7 +4,7 @@ mod traits;
 pub use traits::BaseTxTr;
 
 mod core;
-pub use core::BaseTransaction;
+pub use core::{AaTransactionParts, BaseTransaction};
 
 mod builder;
 pub use builder::BaseTransactionBuilder;

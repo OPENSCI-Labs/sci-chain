@@ -1,13 +1,13 @@
 use std::{
     any::Any,
     sync::{
-        Arc,
+        Arc, LazyLock,
         atomic::{AtomicU64, Ordering},
     },
 };
 
 use alloy_consensus::{BlockHeader, Transaction};
-use alloy_primitives::U256;
+use alloy_primitives::{Address, B256, U256};
 use base_common_chains::Upgrades;
 use base_common_evm::{BaseSpecId, L1BlockInfo};
 use base_common_genesis::DaFootprintGasScalarUpdate;
@@ -18,14 +18,42 @@ use reth_primitives_traits::{
     Block, BlockBody, BlockTy, GotExpected, SealedBlock,
     transaction::error::InvalidTransactionError,
 };
-use reth_storage_api::{AccountInfoReader, BlockReaderIdExt, StateProviderFactory};
+use reth_storage_api::{AccountInfoReader, AccountReader, BlockReaderIdExt, StateProviderFactory};
 use reth_transaction_pool::{
     EthPoolTransaction, EthTransactionValidator, TransactionOrigin, TransactionValidationOutcome,
     TransactionValidator,
     error::{InvalidPoolTransactionError, PoolTransactionError},
 };
+use sci_precompiles::{ACCOUNT_KEYCHAIN_ADDRESS, AccountKeychain};
 
 use crate::BasePooledTx;
+
+/// Experimental (decentralization gap analysis, `sci/docs/plan-a-decentralization-gap.md`):
+/// when `SCI_AA_GOSSIP=1` (or `true`), AA `0x76` transactions are allowed to propagate to peers
+/// instead of being forced `propagate = false`. Default (unset) keeps the production local-only
+/// behavior. Read once at startup. This gate exists to A/B the "de-local-only" hypothesis on a
+/// single image; remove it once the final gossip design lands.
+static AA_GOSSIP_ENABLED: LazyLock<bool> = LazyLock::new(|| {
+    std::env::var("SCI_AA_GOSSIP")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+});
+
+/// Maximum number of inner calls in an AA (`0x76`) transaction batch.
+///
+/// Pool-only `DoS` limit (see [`BaseTransactionValidator::ensure_aa_field_limits`]): bounds the
+/// AA call batch and access-list cardinality at admission rather than at RLP decoding, so the
+/// core tx format stays flexible and a peer sending an oversized AA tx can be penalized.
+/// Mirrors the caps in Tempo's `crates/transaction-pool/src/validator.rs`.
+pub const MAX_AA_CALLS: usize = 32;
+/// Maximum calldata size (bytes) of a single inner AA call.
+pub const MAX_AA_CALL_INPUT_SIZE: usize = 128 * 1024;
+/// Maximum number of access-list accounts in an AA transaction.
+pub const MAX_AA_ACCESS_LIST_ACCOUNTS: usize = 256;
+/// Maximum storage keys per access-list account in an AA transaction.
+pub const MAX_AA_STORAGE_KEYS_PER_ACCOUNT: usize = 256;
+/// Maximum total storage keys across an AA transaction's whole access list.
+pub const MAX_AA_ACCESS_LIST_STORAGE_KEYS_TOTAL: usize = 2048;
 
 /// Base-specific transaction pool validation errors.
 #[derive(Debug, thiserror::Error)]
@@ -39,6 +67,72 @@ pub enum BaseTxPoolError {
         transaction_da_footprint: u64,
         /// The current block gas limit.
         block_gas_limit: u64,
+    },
+    /// An AA transaction's call batch is empty (a gas-consuming no-op that several
+    /// first-call consumers cannot represent).
+    #[error("AA transaction has an empty call batch")]
+    EmptyAaBatch,
+    /// An AA transaction's call batch exceeds [`MAX_AA_CALLS`].
+    #[error("AA transaction has too many calls ({count} > {max_allowed})")]
+    TooManyAaCalls {
+        /// The number of calls in the AA batch.
+        count: usize,
+        /// The maximum allowed ([`MAX_AA_CALLS`]).
+        max_allowed: usize,
+    },
+    /// An AA inner call's calldata exceeds [`MAX_AA_CALL_INPUT_SIZE`].
+    #[error("AA call {call_index} input too large ({size} > {max_allowed} bytes)")]
+    AaCallInputTooLarge {
+        /// Index of the offending call within the batch.
+        call_index: usize,
+        /// The call's calldata size in bytes.
+        size: usize,
+        /// The maximum allowed ([`MAX_AA_CALL_INPUT_SIZE`]).
+        max_allowed: usize,
+    },
+    /// An AA transaction's access list exceeds [`MAX_AA_ACCESS_LIST_ACCOUNTS`].
+    #[error("AA transaction access list has too many accounts ({count} > {max_allowed})")]
+    TooManyAaAccessListAccounts {
+        /// The number of access-list accounts.
+        count: usize,
+        /// The maximum allowed ([`MAX_AA_ACCESS_LIST_ACCOUNTS`]).
+        max_allowed: usize,
+    },
+    /// An AA access-list account exceeds [`MAX_AA_STORAGE_KEYS_PER_ACCOUNT`].
+    #[error(
+        "AA access-list account {account_index} has too many storage keys ({count} > {max_allowed})"
+    )]
+    TooManyAaStorageKeysPerAccount {
+        /// Index of the offending access-list account.
+        account_index: usize,
+        /// The number of storage keys for that account.
+        count: usize,
+        /// The maximum allowed ([`MAX_AA_STORAGE_KEYS_PER_ACCOUNT`]).
+        max_allowed: usize,
+    },
+    /// An AA transaction's access list exceeds [`MAX_AA_ACCESS_LIST_STORAGE_KEYS_TOTAL`].
+    #[error("AA transaction access list has too many total storage keys ({count} > {max_allowed})")]
+    TooManyAaTotalStorageKeys {
+        /// The total number of storage keys across the access list.
+        count: usize,
+        /// The maximum allowed ([`MAX_AA_ACCESS_LIST_STORAGE_KEYS_TOTAL`]).
+        max_allowed: usize,
+    },
+    /// An AA transaction names a `fee_payer` different from its `root`. The execution
+    /// handler unconditionally rejects this shape (sponsored gas is only authorized via
+    /// the keychain on the root account), so it can never execute.
+    #[error("AA transaction fee_payer must equal root")]
+    AaFeePayerRootMismatch,
+    /// A sponsored AA transaction's signer has no plausibly-active keychain key
+    /// (`keys[root][signer]`) at admission time, so the execution-time keychain hook is
+    /// guaranteed to reject it. Without this gate, unlimited fresh zero-balance signers
+    /// naming a funded `fee_payer` could stuff the pool at zero cost.
+    #[error("sponsored AA transaction signer {signer} has no active keychain key for root {root}")]
+    AaSponsoredSignerNotAuthorized {
+        /// The root account named as `fee_payer`/`root`.
+        root: Address,
+        /// The session key that signed the AA transaction.
+        signer: Address,
     },
 }
 
@@ -182,6 +276,68 @@ where
     ///
     /// This allows reusing the same state provider across multiple transaction validations.
     ///
+    /// Pool-only `DoS` field limits for AA (`0x76`) transactions: bounds the call batch and the
+    /// access-list cardinality so a malicious peer cannot cheaply force expensive validation or
+    /// bloat the pool with an oversized AA tx. No-op for non-AA transactions. Errors are
+    /// [`BaseTxPoolError`] (`is_bad_transaction = true`), so an offending peer can be penalized.
+    /// Mirrors Tempo's `ensure_aa_field_limits`.
+    pub fn ensure_aa_field_limits(transaction: &Tx) -> Result<(), BaseTxPoolError> {
+        let Some(aa) = transaction.aa() else {
+            return Ok(());
+        };
+
+        // An empty batch is a gas-consuming no-op at best, and several consumers
+        // (`input_mut`, the first-call RPC approximation) assume `calls[0]` exists.
+        if aa.calls.is_empty() {
+            return Err(BaseTxPoolError::EmptyAaBatch);
+        }
+
+        if aa.calls.len() > MAX_AA_CALLS {
+            return Err(BaseTxPoolError::TooManyAaCalls {
+                count: aa.calls.len(),
+                max_allowed: MAX_AA_CALLS,
+            });
+        }
+
+        for (call_index, call) in aa.calls.iter().enumerate() {
+            if call.input.len() > MAX_AA_CALL_INPUT_SIZE {
+                return Err(BaseTxPoolError::AaCallInputTooLarge {
+                    call_index,
+                    size: call.input.len(),
+                    max_allowed: MAX_AA_CALL_INPUT_SIZE,
+                });
+            }
+        }
+
+        if aa.access_list.len() > MAX_AA_ACCESS_LIST_ACCOUNTS {
+            return Err(BaseTxPoolError::TooManyAaAccessListAccounts {
+                count: aa.access_list.len(),
+                max_allowed: MAX_AA_ACCESS_LIST_ACCOUNTS,
+            });
+        }
+
+        let mut total_storage_keys = 0usize;
+        for (account_index, entry) in aa.access_list.iter().enumerate() {
+            if entry.storage_keys.len() > MAX_AA_STORAGE_KEYS_PER_ACCOUNT {
+                return Err(BaseTxPoolError::TooManyAaStorageKeysPerAccount {
+                    account_index,
+                    count: entry.storage_keys.len(),
+                    max_allowed: MAX_AA_STORAGE_KEYS_PER_ACCOUNT,
+                });
+            }
+            total_storage_keys = total_storage_keys.saturating_add(entry.storage_keys.len());
+        }
+
+        if total_storage_keys > MAX_AA_ACCESS_LIST_STORAGE_KEYS_TOTAL {
+            return Err(BaseTxPoolError::TooManyAaTotalStorageKeys {
+                count: total_storage_keys,
+                max_allowed: MAX_AA_ACCESS_LIST_STORAGE_KEYS_TOTAL,
+            });
+        }
+
+        Ok(())
+    }
+
     /// See also [`TransactionValidator::validate_transaction`]
     ///
     /// This behaves the same as [`EthTransactionValidator::validate_one_with_state`], but in
@@ -201,9 +357,55 @@ where
             );
         }
 
+        // Plan A Phase 1: SCI AA transactions (type 0x76) are local-only in the sense that
+        // they are never gossiped to peers (`propagate = false` below). We do NOT reject by
+        // transaction origin: a sequencer running `--txpool.nolocals` tags every
+        // RPC-submitted tx as `External`, so an origin-based reject would block legitimate
+        // RPC ingress on exactly the node that must build AA blocks. Non-propagation is the
+        // real "local-only" guarantee; admitting an AA tx from any origin is safe because it
+        // still passes the keychain pre-execution hook at execution time.
+        let is_aa = transaction.ty() == base_common_consensus::SCI_AA_TX_TYPE_ID;
+
+        // Pool-only DoS field limits for AA txs, checked before the (more expensive) inner
+        // validation so an oversized AA from a malicious peer is rejected cheaply and the peer
+        // can be penalized (`BaseTxPoolError::is_bad_transaction` = true).
+        if is_aa && let Err(err) = Self::ensure_aa_field_limits(&transaction) {
+            return TransactionValidationOutcome::Invalid(
+                transaction,
+                InvalidPoolTransactionError::other(err),
+            );
+        }
+
         let outcome = self.inner.validate_one_with_state(origin, transaction, state);
 
-        self.apply_base_checks(outcome)
+        let mut outcome = self.apply_base_checks(outcome);
+
+        // Plan A: for a sponsored AA tx the signer's pooled `cost` was overridden to its (zero)
+        // obligation, so verify the `fee_payer` (== root) can actually cover the full economic
+        // cost here — otherwise an underfunded sponsor would be admitted and only fail at block
+        // build. No-op for non-AA / non-sponsored txs.
+        outcome = self.check_aa_sponsor_balance(outcome, state);
+
+        // Plan A: tie the signer to the named root at admission. A sponsored AA tx costs the
+        // (possibly fresh, zero-balance) signer nothing, so without a keychain check anyone
+        // could stuff the pool with txs naming a funded victim as fee_payer that all die at
+        // block build. Requires a plausibly-active `keys[root][signer]` keychain record.
+        outcome = self.check_aa_keychain_authorization(outcome);
+
+        // By default, never propagate AA txs to peers (SCI gossip of AA is intentionally
+        // disabled — "local-only"). The `SCI_AA_GOSSIP` gate flips this for the decentralization
+        // experiment: when enabled, AA txs follow the inner validator's `propagate` flag like any
+        // other tx. The pooled type already 2718-encodes/decodes the AA variant (macro-derived),
+        // and the pool<->network conversions go through `into_base_envelope` / `try_into_pooled`,
+        // so gossip never hits the alloy-conversion `unreachable!` sites in `pooled.rs`.
+        if is_aa
+            && !*AA_GOSSIP_ENABLED
+            && let TransactionValidationOutcome::Valid { propagate, .. } = &mut outcome
+        {
+            *propagate = false;
+        }
+
+        outcome
     }
 
     /// Performs the necessary Base-specific checks based on top of the regular eth outcome.
@@ -261,8 +463,16 @@ where
             );
             let cost = valid_tx.transaction().cost().saturating_add(cost_addition);
 
-            // Checks for max cost
-            if cost > balance {
+            // Plan A: a sponsored AA tx (`fee_payer != signer`) charges the signer only its
+            // overridden pooled `cost` (0 when fully sponsored — see `aa_signer_cost`); the
+            // sponsor's balance is verified separately in `check_aa_sponsor_balance`. Skip the
+            // signer-balance check here so a fundless session key isn't rejected at admission.
+            let aa_sponsored = valid_tx.transaction().aa().is_some_and(|aa| {
+                aa.fee_payer.is_some_and(|fp| fp != valid_tx.transaction().sender())
+            });
+
+            // Checks for max cost (signer side)
+            if !aa_sponsored && cost > balance {
                 return TransactionValidationOutcome::Invalid(
                     valid_tx.into_transaction(),
                     InvalidTransactionError::InsufficientFunds(
@@ -282,6 +492,185 @@ where
             };
         }
         outcome
+    }
+
+    /// For a sponsored AA tx (`fee_payer != signer`; `fee_payer == root` per the handler),
+    /// verifies the `fee_payer` can cover the full economic cost (L2 gas + Σ call values + L1
+    /// data fee). The signer's own balance is irrelevant — its pooled `cost` was overridden to
+    /// its (zero) obligation by `AaTx::aa_signer_pool_cost` (see `transaction.rs`). No-op for
+    /// non-AA or non-sponsored transactions.
+    ///
+    /// Note: the pool does not track the `fee_payer`'s balance across blocks, so a `fee_payer` that
+    /// drains *after* admission is not evicted — the tx stays pending and is skipped at block
+    /// build (the handler rejects it). Same class as any external dependency.
+    fn check_aa_sponsor_balance(
+        &self,
+        outcome: TransactionValidationOutcome<Tx>,
+        state: &Option<Box<dyn AccountInfoReader + Send>>,
+    ) -> TransactionValidationOutcome<Tx> {
+        let TransactionValidationOutcome::Valid {
+            balance,
+            state_nonce,
+            transaction: valid_tx,
+            propagate,
+            bytecode_hash,
+            authorities,
+        } = outcome
+        else {
+            return outcome;
+        };
+
+        // Extract (fee_payer, gas_cost, Σvalue, gas_limit) for a sponsored AA tx; pass through otherwise.
+        let sender = valid_tx.transaction().sender();
+        let sponsor = valid_tx.transaction().aa().and_then(|aa| {
+            aa.fee_payer.filter(|fp| *fp != sender).map(|fp| {
+                let gas = U256::from(aa.max_fee_per_gas).saturating_mul(U256::from(aa.gas_limit));
+                let value = aa.calls.iter().fold(U256::ZERO, |acc, c| acc.saturating_add(c.value));
+                (fp, gas, value, aa.gas_limit)
+            })
+        });
+        let Some((fee_payer, gas_cost, value, gas_limit)) = sponsor else {
+            return TransactionValidationOutcome::Valid {
+                balance,
+                state_nonce,
+                transaction: valid_tx,
+                propagate,
+                bytecode_hash,
+                authorities,
+            };
+        };
+
+        // Full economic cost the fee_payer bears: L2 gas + Σvalue + L1 data fee.
+        let l1_cost = if self.requires_l1_data_gas_fee() {
+            let mut l1_block_info = self.block_info.l1_block_info.read().clone();
+            let spec_id = BaseSpecId::from_timestamp(self.chain_spec(), self.block_timestamp());
+            l1_block_info.tx_cost(
+                &valid_tx.transaction().encoded_2718(),
+                U256::from(gas_limit),
+                spec_id,
+            )
+        } else {
+            U256::ZERO
+        };
+        let needed = gas_cost.saturating_add(value).saturating_add(l1_cost);
+        let fee_payer_balance = self.account_balance(fee_payer, state);
+
+        if fee_payer_balance < needed {
+            return TransactionValidationOutcome::Invalid(
+                valid_tx.into_transaction(),
+                InvalidTransactionError::InsufficientFunds(
+                    GotExpected { got: fee_payer_balance, expected: needed }.into(),
+                )
+                .into(),
+            );
+        }
+
+        TransactionValidationOutcome::Valid {
+            balance,
+            state_nonce,
+            transaction: valid_tx,
+            propagate,
+            bytecode_hash,
+            authorities,
+        }
+    }
+
+    /// Admission gate tying an AA tx's signer to its named `root` (review finding M-3).
+    ///
+    /// Two checks, both no-ops for non-AA transactions:
+    /// 1. **Structural** — `fee_payer`, when set, must equal `root`. The execution handler
+    ///    (`SciHandler::validate_against_state_and_deduct_caller`) unconditionally rejects
+    ///    any other shape, so admitting it only wastes a pool slot.
+    /// 2. **Keychain** — a *sponsored* tx (`fee_payer != signer`) is free for the signer, so
+    ///    admission requires a plausibly-active `keys[root][signer]` record in the keychain
+    ///    precompile's storage (raw slot read via
+    ///    [`AccountKeychain::authorized_key_slot`], decoded with the precompile's own
+    ///    packing). This is advisory — the execution-time hook stays authoritative (it
+    ///    re-checks activity, scope, limits, and the circuit breaker) — but it means pool
+    ///    stuffing now requires the victim root to have actually authorized the signer.
+    ///
+    /// Reads latest committed state, like `check_aa_sponsor_balance`: a key authorized in a
+    /// not-yet-mined tx is not visible, so submit the AA tx after the authorization lands.
+    /// Fails open on state-provider errors (liveness over filtering; the handler still gates).
+    fn check_aa_keychain_authorization(
+        &self,
+        outcome: TransactionValidationOutcome<Tx>,
+    ) -> TransactionValidationOutcome<Tx> {
+        let TransactionValidationOutcome::Valid {
+            balance,
+            state_nonce,
+            transaction: valid_tx,
+            propagate,
+            bytecode_hash,
+            authorities,
+        } = outcome
+        else {
+            return outcome;
+        };
+
+        let sender = valid_tx.transaction().sender();
+        if let Some((fee_payer, root)) =
+            valid_tx.transaction().aa().map(|aa| (aa.fee_payer, aa.root))
+        {
+            if fee_payer.is_some() && fee_payer != root {
+                return TransactionValidationOutcome::Invalid(
+                    valid_tx.into_transaction(),
+                    InvalidPoolTransactionError::other(BaseTxPoolError::AaFeePayerRootMismatch),
+                );
+            }
+            if let Some(sponsor_root) = fee_payer.filter(|fp| *fp != sender) {
+                let slot = AccountKeychain::authorized_key_slot(sponsor_root, sender);
+                let word = self
+                    .client()
+                    .latest()
+                    .and_then(|sp| sp.storage(ACCOUNT_KEYCHAIN_ADDRESS, B256::from(slot)));
+                if let Ok(word) = word
+                    && !AccountKeychain::authorized_key_word_is_active(
+                        word.unwrap_or(U256::ZERO),
+                        self.block_timestamp(),
+                    )
+                {
+                    return TransactionValidationOutcome::Invalid(
+                        valid_tx.into_transaction(),
+                        InvalidPoolTransactionError::other(
+                            BaseTxPoolError::AaSponsoredSignerNotAuthorized {
+                                root: sponsor_root,
+                                signer: sender,
+                            },
+                        ),
+                    );
+                }
+            }
+        }
+
+        TransactionValidationOutcome::Valid {
+            balance,
+            state_nonce,
+            transaction: valid_tx,
+            propagate,
+            bytecode_hash,
+            authorities,
+        }
+    }
+
+    /// Reads an account's balance from the in-flight validation `state` reader, falling back to
+    /// the latest committed state. Returns zero when the account is absent or unreadable.
+    fn account_balance(
+        &self,
+        address: Address,
+        state: &Option<Box<dyn AccountInfoReader + Send>>,
+    ) -> U256 {
+        if let Some(reader) = state.as_ref()
+            && let Ok(Some(account)) = reader.basic_account(&address)
+        {
+            return account.balance;
+        }
+        self.client()
+            .latest()
+            .ok()
+            .and_then(|sp| sp.basic_account(&address).ok().flatten())
+            .map(|account| account.balance)
+            .unwrap_or(U256::ZERO)
     }
 }
 
@@ -313,19 +702,24 @@ where
 
 #[cfg(test)]
 mod tests {
-    use alloy_consensus::{SignableTransaction, TxEip1559, transaction::SignerRecoverable};
+    use alloy_consensus::{
+        SignableTransaction, TxEip1559,
+        transaction::{Recovered, SignerRecoverable},
+    };
     use alloy_eips::eip2718::Encodable2718;
     use alloy_primitives::{Address, TxKind, U256, bytes, hex::decode};
     use alloy_signer::SignerSync;
     use base_common_chains::ChainConfig;
-    use base_common_consensus::{BasePrimitives, BaseTransactionSigned, BaseTxEnvelope, TxDeposit};
+    use base_common_consensus::{
+        BaseAaTransaction, BasePrimitives, BaseTransactionSigned, BaseTxEnvelope, Call, TxDeposit,
+    };
     use base_execution_chainspec::BaseChainSpec;
     use base_execution_evm::BaseEvmConfig;
     use base_test_utils::Account;
     use reth_provider::test_utils::{ExtendedAccount, MockEthProvider};
     use reth_transaction_pool::{
-        TransactionOrigin, TransactionValidationOutcome, blobstore::InMemoryBlobStore,
-        validate::EthTransactionValidatorBuilder,
+        PoolTransaction, TransactionOrigin, TransactionValidationOutcome,
+        blobstore::InMemoryBlobStore, validate::EthTransactionValidatorBuilder,
     };
 
     use super::*;
@@ -410,6 +804,7 @@ mod tests {
         let inner = EthTransactionValidatorBuilder::new(client, evm_config)
             .no_shanghai()
             .no_cancun()
+            .with_custom_tx_type(base_common_consensus::SCI_AA_TX_TYPE_ID)
             .build(InMemoryBlobStore::default());
         let validator =
             BaseTransactionValidator::with_block_info(inner, BaseL1BlockInfo::default());
@@ -451,5 +846,307 @@ mod tests {
                 "expected operator-fee-underfunded tx to be rejected at admission, got {other:?}"
             ),
         }
+    }
+
+    /// `gas_cost` of the AA fixture (`gas_limit * max_fee_per_gas`).
+    const AA_GAS_COST: u128 = 50_000 * 1_000;
+
+    /// Builds a signed SCI AA (`0x76`) transaction (signed by Alice = the session key) and its
+    /// recovered form, with the given `fee_payer` / `root` and a single call moving `value`.
+    fn build_aa_tx(
+        chain_id: u64,
+        fee_payer: Option<Address>,
+        root: Option<Address>,
+        value: U256,
+    ) -> (Recovered<BaseTransactionSigned>, usize) {
+        let signer = Account::Alice.signer();
+        let tx = BaseAaTransaction {
+            chain_id,
+            nonce: 0,
+            max_priority_fee_per_gas: 0,
+            max_fee_per_gas: 1_000,
+            gas_limit: 50_000,
+            calls: vec![Call {
+                to: TxKind::Call(Address::random()),
+                value,
+                input: Default::default(),
+            }],
+            access_list: Default::default(),
+            fee_payer,
+            root,
+        };
+        let signature = signer.sign_hash_sync(&tx.signature_hash()).unwrap();
+        let envelope = BaseTxEnvelope::Aa(tx.into_signed(signature));
+        let len = envelope.encode_2718_len();
+        (envelope.try_into_recovered().unwrap(), len)
+    }
+
+    /// An AA tx whose call batch exceeds [`MAX_AA_CALLS`] is rejected at admission (pool-only
+    /// `DoS` limit), so a peer flooding oversized AA txs over gossip can be penalized. See
+    /// `sci/docs/plan-a-decentralization-gap.md`.
+    #[tokio::test]
+    async fn rejects_aa_with_too_many_calls() {
+        let chain_spec = Arc::new(BaseChainSpec::mainnet());
+        let chain_id = ChainConfig::mainnet().chain_id;
+        let signer = Account::Alice.signer();
+        let tx = BaseAaTransaction {
+            chain_id,
+            nonce: 0,
+            max_priority_fee_per_gas: 0,
+            max_fee_per_gas: 1_000,
+            gas_limit: 50_000,
+            // MAX_AA_CALLS + 1 calls → over the limit.
+            calls: (0..=MAX_AA_CALLS)
+                .map(|_| Call {
+                    to: TxKind::Call(Address::random()),
+                    value: U256::from(1),
+                    input: Default::default(),
+                })
+                .collect(),
+            access_list: Default::default(),
+            fee_payer: None,
+            root: None,
+        };
+        let signature = signer.sign_hash_sync(&tx.signature_hash()).unwrap();
+        let envelope = BaseTxEnvelope::Aa(tx.into_signed(signature));
+        let len = envelope.encode_2718_len();
+        let recovered = envelope.try_into_recovered().unwrap();
+
+        let client = MockEthProvider::<BasePrimitives>::new()
+            .with_chain_spec(Arc::clone(&chain_spec))
+            .with_genesis_block();
+        client.add_account(
+            recovered.signer(),
+            ExtendedAccount::new(0, U256::from(1_000_000_000_000_000_000u128)),
+        );
+        let evm_config = BaseEvmConfig::base(Arc::clone(&chain_spec));
+        let inner = EthTransactionValidatorBuilder::new(client, evm_config)
+            .no_shanghai()
+            .no_cancun()
+            .with_custom_tx_type(base_common_consensus::SCI_AA_TX_TYPE_ID)
+            .build(InMemoryBlobStore::default());
+        let validator =
+            BaseTransactionValidator::with_block_info(inner, BaseL1BlockInfo::default());
+
+        let pooled: BasePooledTransaction = BasePooledTransaction::new(recovered, len);
+        let outcome = validator.validate_one(TransactionOrigin::External, pooled).await;
+        match outcome {
+            TransactionValidationOutcome::Invalid(_, err) => assert!(
+                err.to_string().contains("too many calls"),
+                "expected TooManyAaCalls rejection, got {err:?}"
+            ),
+            other => panic!("expected AA with >MAX_AA_CALLS calls to be rejected, got {other:?}"),
+        }
+    }
+
+    /// Seeds the keychain precompile's storage in the mock provider so `keys[root][signer]`
+    /// decodes as an active (non-revoked, far-future-expiry) key — what the admission gate
+    /// `check_aa_keychain_authorization` requires for sponsored AA txs.
+    fn seed_keychain_authorization<C>(
+        client: &MockEthProvider<BasePrimitives, C>,
+        root: Address,
+        signer: Address,
+    ) where
+        C: std::fmt::Debug + Send + Sync,
+    {
+        let word = AccountKeychain::encode_authorized_key(
+            &sci_precompiles::account_keychain::AuthorizedKey {
+                signature_type: 0,
+                expiry: u64::MAX,
+                enforce_limits: false,
+                is_revoked: false,
+            },
+        )
+        .expect("packed key fits one word");
+        let slot = AccountKeychain::authorized_key_slot(root, signer);
+        client.add_account(
+            ACCOUNT_KEYCHAIN_ADDRESS,
+            ExtendedAccount::new(0, U256::ZERO)
+                .extend_storage([(alloy_primitives::B256::from(slot), word)]),
+        );
+    }
+
+    /// A fully-sponsored AA tx (`fee_payer == root != signer`) is admitted even though the
+    /// signing session key holds no funds — the `fee_payer` covers the cost and the keychain
+    /// records the signer as an authorized session key for the root.
+    #[tokio::test]
+    async fn admits_fundless_signer_when_fee_payer_funded() {
+        let chain_spec = Arc::new(BaseChainSpec::mainnet());
+        let chain_id = ChainConfig::mainnet().chain_id;
+        let sponsor = Address::random(); // fee_payer == root
+        let (recovered, len) = build_aa_tx(chain_id, Some(sponsor), Some(sponsor), U256::from(5));
+        let signer = recovered.signer();
+
+        let client = MockEthProvider::<BasePrimitives>::new()
+            .with_chain_spec(Arc::clone(&chain_spec))
+            .with_genesis_block();
+        client.add_account(signer, ExtendedAccount::new(0, U256::ZERO)); // fundless session key
+        client.add_account(
+            sponsor,
+            ExtendedAccount::new(0, U256::from(1_000_000_000_000_000_000u128)), // 1 ETH
+        );
+        seed_keychain_authorization(&client, sponsor, signer);
+        let evm_config = BaseEvmConfig::base(Arc::clone(&chain_spec));
+        let inner = EthTransactionValidatorBuilder::new(client, evm_config)
+            .no_shanghai()
+            .no_cancun()
+            .with_custom_tx_type(base_common_consensus::SCI_AA_TX_TYPE_ID)
+            .build(InMemoryBlobStore::default());
+        let validator =
+            BaseTransactionValidator::with_block_info(inner, BaseL1BlockInfo::default());
+
+        let pooled: BasePooledTransaction = BasePooledTransaction::new(recovered, len);
+        assert_eq!(*pooled.cost(), U256::ZERO, "fully-sponsored signer owes nothing");
+        let outcome = validator.validate_one(TransactionOrigin::External, pooled).await;
+        assert!(
+            matches!(outcome, TransactionValidationOutcome::Valid { .. }),
+            "fundless signer with funded fee_payer should be admitted, got {outcome:?}"
+        );
+    }
+
+    /// A sponsored AA tx whose signer has NO keychain record for the named root is rejected
+    /// at admission — the zero-cost pool-stuffing vector (review finding M-3): unlimited
+    /// fresh zero-balance signers naming a funded victim as `fee_payer` must not occupy
+    /// pool slots.
+    #[tokio::test]
+    async fn rejects_sponsored_aa_without_keychain_authorization() {
+        let chain_spec = Arc::new(BaseChainSpec::mainnet());
+        let chain_id = ChainConfig::mainnet().chain_id;
+        let sponsor = Address::random(); // funded victim, never authorized the signer
+        let (recovered, len) = build_aa_tx(chain_id, Some(sponsor), Some(sponsor), U256::from(5));
+        let signer = recovered.signer();
+
+        let client = MockEthProvider::<BasePrimitives>::new()
+            .with_chain_spec(Arc::clone(&chain_spec))
+            .with_genesis_block();
+        client.add_account(signer, ExtendedAccount::new(0, U256::ZERO));
+        client.add_account(
+            sponsor,
+            ExtendedAccount::new(0, U256::from(1_000_000_000_000_000_000u128)),
+        );
+        // No keychain seeding — keys[sponsor][signer] is empty.
+        let evm_config = BaseEvmConfig::base(Arc::clone(&chain_spec));
+        let inner = EthTransactionValidatorBuilder::new(client, evm_config)
+            .no_shanghai()
+            .no_cancun()
+            .with_custom_tx_type(base_common_consensus::SCI_AA_TX_TYPE_ID)
+            .build(InMemoryBlobStore::default());
+        let validator =
+            BaseTransactionValidator::with_block_info(inner, BaseL1BlockInfo::default());
+
+        let pooled: BasePooledTransaction = BasePooledTransaction::new(recovered, len);
+        let outcome = validator.validate_one(TransactionOrigin::External, pooled).await;
+        match outcome {
+            TransactionValidationOutcome::Invalid(_, err) => assert!(
+                err.to_string().contains("no active keychain key"),
+                "expected AaSponsoredSignerNotAuthorized, got {err:?}"
+            ),
+            other => panic!("expected unauthorized sponsored AA to be rejected, got {other:?}"),
+        }
+    }
+
+    /// An AA tx naming a `fee_payer` different from `root` can never execute (the handler
+    /// rejects the shape unconditionally), so it is rejected at admission.
+    #[tokio::test]
+    async fn rejects_aa_fee_payer_root_mismatch() {
+        let chain_spec = Arc::new(BaseChainSpec::mainnet());
+        let chain_id = ChainConfig::mainnet().chain_id;
+        let fee_payer = Address::random();
+        let (recovered, len) = build_aa_tx(
+            chain_id,
+            Some(fee_payer),
+            Some(Address::random()), // root != fee_payer
+            U256::from(5),
+        );
+        let signer = recovered.signer();
+
+        let client = MockEthProvider::<BasePrimitives>::new()
+            .with_chain_spec(Arc::clone(&chain_spec))
+            .with_genesis_block();
+        client.add_account(signer, ExtendedAccount::new(0, U256::ZERO));
+        // Fund the fee_payer so the sponsor-balance check passes and the structural
+        // fee_payer != root rejection is what actually fires.
+        client.add_account(
+            fee_payer,
+            ExtendedAccount::new(0, U256::from(1_000_000_000_000_000_000u128)),
+        );
+        let evm_config = BaseEvmConfig::base(Arc::clone(&chain_spec));
+        let inner = EthTransactionValidatorBuilder::new(client, evm_config)
+            .no_shanghai()
+            .no_cancun()
+            .with_custom_tx_type(base_common_consensus::SCI_AA_TX_TYPE_ID)
+            .build(InMemoryBlobStore::default());
+        let validator =
+            BaseTransactionValidator::with_block_info(inner, BaseL1BlockInfo::default());
+
+        let pooled: BasePooledTransaction = BasePooledTransaction::new(recovered, len);
+        let outcome = validator.validate_one(TransactionOrigin::External, pooled).await;
+        match outcome {
+            TransactionValidationOutcome::Invalid(_, err) => assert!(
+                err.to_string().contains("fee_payer must equal root"),
+                "expected AaFeePayerRootMismatch, got {err:?}"
+            ),
+            other => panic!("expected fee_payer/root mismatch to be rejected, got {other:?}"),
+        }
+    }
+
+    /// A sponsored AA tx whose `fee_payer` cannot cover the cost is rejected at admission
+    /// (rather than admitted and silently failing at block build).
+    #[tokio::test]
+    async fn rejects_aa_when_fee_payer_underfunded() {
+        let chain_spec = Arc::new(BaseChainSpec::mainnet());
+        let chain_id = ChainConfig::mainnet().chain_id;
+        let sponsor = Address::random();
+        let (recovered, len) = build_aa_tx(chain_id, Some(sponsor), Some(sponsor), U256::from(5));
+        let signer = recovered.signer();
+
+        let client = MockEthProvider::<BasePrimitives>::new()
+            .with_chain_spec(Arc::clone(&chain_spec))
+            .with_genesis_block();
+        client.add_account(signer, ExtendedAccount::new(0, U256::ZERO));
+        client.add_account(sponsor, ExtendedAccount::new(0, U256::from(1_000))); // << gas cost
+        let evm_config = BaseEvmConfig::base(Arc::clone(&chain_spec));
+        let inner = EthTransactionValidatorBuilder::new(client, evm_config)
+            .no_shanghai()
+            .no_cancun()
+            .with_custom_tx_type(base_common_consensus::SCI_AA_TX_TYPE_ID)
+            .build(InMemoryBlobStore::default());
+        let validator =
+            BaseTransactionValidator::with_block_info(inner, BaseL1BlockInfo::default());
+
+        let pooled: BasePooledTransaction = BasePooledTransaction::new(recovered, len);
+        let outcome = validator.validate_one(TransactionOrigin::External, pooled).await;
+        match outcome {
+            TransactionValidationOutcome::Invalid(_, err) => assert!(
+                matches!(
+                    err,
+                    InvalidPoolTransactionError::Consensus(
+                        InvalidTransactionError::InsufficientFunds(_)
+                    )
+                ),
+                "expected InsufficientFunds for underfunded fee_payer, got {err:?}"
+            ),
+            other => panic!("expected underfunded fee_payer to be rejected, got {other:?}"),
+        }
+    }
+
+    /// The pooled `cost` reflects what the *signer* actually owes: zero when fully sponsored,
+    /// gas + Σvalue for a plain (`root=None`/`fee_payer=None`) batch.
+    #[test]
+    fn aa_pool_cost_reflects_signer_obligation() {
+        let chain_id = ChainConfig::mainnet().chain_id;
+        let sponsor = Address::random();
+
+        let (sponsored, len) = build_aa_tx(chain_id, Some(sponsor), Some(sponsor), U256::from(5));
+        let pooled: BasePooledTransaction = BasePooledTransaction::new(sponsored, len);
+        assert_eq!(*pooled.cost(), U256::ZERO, "fully sponsored → signer cost 0");
+
+        let (plain, len2) = build_aa_tx(chain_id, None, None, U256::from(5));
+        let pooled2: BasePooledTransaction = BasePooledTransaction::new(plain, len2);
+        assert_eq!(
+            *pooled2.cost(),
+            U256::from(AA_GAS_COST).saturating_add(U256::from(5)),
+            "plain batch → signer owes gas + value"
+        );
     }
 }

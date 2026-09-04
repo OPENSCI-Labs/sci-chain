@@ -78,6 +78,9 @@ impl BaseReceiptEnvelope {
             OpTxType::Eip7702 => {
                 Self::Eip7702(ReceiptWithBloom { receipt: inner_receipt, logs_bloom })
             }
+            // PoC: AA tx receipts are represented as EIP-1559 receipts. A dedicated AA
+            // receipt type lands in Phase 1.
+            OpTxType::Aa => Self::Eip1559(ReceiptWithBloom { receipt: inner_receipt, logs_bloom }),
             OpTxType::Deposit => {
                 let inner = DepositReceiptWithBloom {
                     receipt: DepositReceipt {
@@ -302,7 +305,7 @@ impl Decodable2718 for BaseReceiptEnvelope {
                 Err(alloy_rlp::Error::Custom("type-0 eip2718 transactions are not supported")
                     .into())
             }
-            OpTxType::Eip1559 => Ok(Self::Eip1559(Decodable::decode(buf)?)),
+            OpTxType::Eip1559 | OpTxType::Aa => Ok(Self::Eip1559(Decodable::decode(buf)?)),
             OpTxType::Eip7702 => Ok(Self::Eip7702(Decodable::decode(buf)?)),
             OpTxType::Eip2930 => Ok(Self::Eip2930(Decodable::decode(buf)?)),
             OpTxType::Deposit => Ok(Self::Deposit(Decodable::decode(buf)?)),

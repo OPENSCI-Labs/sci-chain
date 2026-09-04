@@ -13,7 +13,10 @@ extern crate alloc;
 #[cfg(feature = "reth")]
 mod reth_compat;
 #[cfg(feature = "reth")]
-pub use reth_compat::{BaseBlockBody, BasePrimitives, CompactTxDeposit, DepositReceiptExt};
+pub use reth_compat::{
+    BaseBlockBody, BasePrimitives, CompactBaseAaTransaction, CompactCall, CompactTxDeposit,
+    DepositReceiptExt,
+};
 
 mod receipts;
 pub use receipts::{
@@ -24,8 +27,9 @@ mod transaction;
 #[cfg(feature = "serde")]
 pub use transaction::serde_deposit_tx_rpc;
 pub use transaction::{
-    BasePooledTransaction, BaseTransaction, BaseTransactionInfo, BaseTxEnvelope,
-    BaseTypedTransaction, DEPOSIT_TX_TYPE_ID, DepositInfo, DepositTransaction, OpTxType, TxDeposit,
+    BaseAaTransaction, BasePooledTransaction, BaseTransaction, BaseTransactionInfo, BaseTxEnvelope,
+    BaseTypedTransaction, Call, DEPOSIT_TX_TYPE_ID, DepositInfo, DepositTransaction, OpTxType,
+    SCI_AA_TX_TYPE_ID, TxDeposit,
 };
 
 mod extra;

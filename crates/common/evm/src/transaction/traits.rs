@@ -6,13 +6,20 @@ use revm::{
     primitives::{B256, Bytes},
 };
 
-use crate::DEPOSIT_TRANSACTION_TYPE;
+use crate::{AaTransactionParts, DEPOSIT_TRANSACTION_TYPE};
 
 /// Base Transaction trait.
 #[auto_impl(&, &mut, Box, Arc)]
 pub trait BaseTxTr: Transaction {
     /// Enveloped transaction bytes.
     fn enveloped_tx(&self) -> Option<&Bytes>;
+
+    /// SCI AA (account-abstraction, type `0x76`) transaction parts, if this env was built
+    /// from a `BaseTxEnvelope::Aa`. `None` for every other tx type. Used by `SciHandler`
+    /// to drive the multi-call executor.
+    fn aa_parts(&self) -> Option<&AaTransactionParts> {
+        None
+    }
 
     /// Source hash of the deposit transaction.
     fn source_hash(&self) -> Option<B256>;

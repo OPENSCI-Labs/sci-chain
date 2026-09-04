@@ -1,0 +1,10 @@
+services:
+  base-builder-cl:
+    extra_hosts: ["host.docker.internal:host-gateway"]
+  base-client-cl:
+    extra_hosts: ["host.docker.internal:host-gateway"]
+  base-batcher:
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    environment:
+      - BATCHER_DATA_AVAILABILITY_TYPE=calldata
+      - BATCHER_NO_FORCE_BLOBS_WHEN_THROTTLING=true

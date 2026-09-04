@@ -1,0 +1,17 @@
+[package]
+name = "sci-aa-txgen"
+version = "0.0.0"
+edition = "2024"
+publish = false
+description = "Dev tool: construct + sign + 2718-encode a SCI AA transaction (type 0x76)"
+
+[dependencies]
+base-common-consensus = { workspace = true, features = ["k256"] }
+alloy-consensus = { workspace = true }
+alloy-primitives = { workspace = true }
+alloy-eips = { workspace = true }
+alloy-signer = { workspace = true }
+alloy-signer-local = { workspace = true }
+
+[lints]
+workspace = true

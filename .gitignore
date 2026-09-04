@@ -15,3 +15,15 @@ crates/proof/succinct/elf/range-elf-embedded
 crates/proof/succinct/elf/aggregation-elf
 crates/proof/succinct/elf/*.bin
 /etc/scripts/local/__pycache__/
+# SCI working-notes / dev-period analysis docs — never committed.
+# See CLAUDE.md Critical Rule #7 (English-only docs policy).
+sci/docs/analysis/
+
+# SCI manual / hands-on test walkthroughs — local verification only, never committed.
+sci/docs/test/
+
+# SCI upgrade / uplift working notes (Base version bumps, CGT, EIP-8130) — local only, never committed.
+sci/docs/upgrade/
+
+# SCI operational key-lessons / incident postmortems — local only, never committed.
+sci/docs/key-lessons/

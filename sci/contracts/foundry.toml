@@ -1,0 +1,63 @@
+[profile.default]
+src = "src"
+out = "out"
+libs = ["lib"]
+test = "test"
+script = "script"
+cache_path = "cache"
+
+solc_version = "0.8.28"
+evm_version = "cancun"
+optimizer = true
+optimizer_runs = 200
+# via_ir = true keeps the nested-struct `authorizeKey(address,uint8,KeyRestrictions)`
+# calldata in `test/integration/base/DevnetBase.sol` (authorizeUnrestricted) and
+# `test/integration/Registry.t.sol` compileable — it trips the legacy code
+# generator's stack limit. First compile is ~30s; cached thereafter. Tests don't
+# pay any runtime cost. NOTE: this changes generated runtime bytecode vs. earlier
+# no-via_ir builds, so `test/integration/DeploymentParity.t.sol` only passes
+# when the on-chain predeploys were baked with the SAME via_ir setting; see
+# that file's header for the opt-in toggle.
+via_ir = true
+extra_output = ["storageLayout"]
+
+remappings = [
+    "forge-std/=lib/forge-std/src/",
+    "solady/=lib/solady/src/",
+    "@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/",
+]
+
+fs_permissions = [{ access = "read", path = "./" }]
+
+# Default `forge test` excludes the integration suite — those require a live
+# SCI devnet RPC via `--fork-url`. The default skip is implemented as a
+# chain-id check in each test's setUp (see test/integration/base/DevnetBase.sol).
+# To run integration tests:
+#   forge test --fork-url $L2_RPC --match-path 'test/integration/**'
+# Or via the explicit profile:
+#   FOUNDRY_PROFILE=integration forge test --fork-url $L2_RPC
+
+[profile.integration]
+match_path = "test/integration/**/*.t.sol"
+fuzz = { runs = 256 }
+# Invariant tests in fork mode are slow: every random call goes over the SSH
+# tunnel to the remote RPC. Keep runs and depth low — invariants here exist
+# to spot-check the property holds, not exhaustively explore.
+invariant = { runs = 4, depth = 16, fail_on_revert = false }
+
+[profile.stress]
+match_path = "test/integration/Stress.t.sol"
+# Stress tests intentionally do many sequential writes; loosen the fuzz budget
+# back to defaults and let the linear test bodies run.
+fuzz = { runs = 16 }
+
+
+[fmt]
+line_length = 100
+tab_width = 4
+bracket_spacing = true
+int_types = "long"
+multiline_func_header = "all"
+quote_style = "double"
+number_underscore = "thousands"
+sort_imports = true

@@ -31,7 +31,10 @@ impl BaseReceiptBuilder for BaseRethReceiptBuilder {
 
                 Ok(match ty {
                     OpTxType::Legacy => BaseReceipt::Legacy(receipt),
-                    OpTxType::Eip1559 => BaseReceipt::Eip1559(receipt),
+                    // AA txs map to an EIP-1559 receipt (BaseReceipt has no AA variant, matching
+                    // the OpTxType::Aa -> Eip1559 mapping in reth_compat). A dedicated AA receipt
+                    // type is deferred.
+                    OpTxType::Eip1559 | OpTxType::Aa => BaseReceipt::Eip1559(receipt),
                     OpTxType::Eip2930 => BaseReceipt::Eip2930(receipt),
                     OpTxType::Eip7702 => BaseReceipt::Eip7702(receipt),
                     OpTxType::Deposit => unreachable!(),

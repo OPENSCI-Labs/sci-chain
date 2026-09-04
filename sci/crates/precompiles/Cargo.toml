@@ -1,0 +1,61 @@
+[package]
+name = "sci-precompiles"
+description = "SCI Chain EVM precompile implementations: AccountKeychain for session keys and spending limits"
+
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# revm is aliased to `sci-revm-shim`, our compat layer that exposes the v38
+# PrecompileOutput / PrecompileHalt / state-gas / reservoir API surface needed
+# by verbatim Tempo v1.7.1+ source while binding back to Base v0.9's real
+# revm 34 at the `install()` boundary via `revm::precompile::to_revm34`.
+# This alias is scoped strictly to sci-precompiles — every other workspace
+# member continues to depend on real revm 34 directly.
+#
+# Note: Cargo does not allow `package = ...` on workspace-inherited deps
+# (only `workspace = true`, `optional`, `features` are passthrough keys),
+# so this dep is declared directly with the path. The shim crate is
+# registered in the workspace `Cargo.toml` so all workspace tooling still
+# sees it via `sci-revm-shim`.
+revm = { path = "../revm-shim", package = "sci-revm-shim" }
+thiserror.workspace = true
+scoped-tls = "1.0"
+derive_more = { workspace = true, default-features = false }
+
+alloy-evm = { workspace = true, features = ["std"] }
+alloy-primitives.workspace = true
+alloy-sol-types = { workspace = true, features = ["std"] }
+alloy-consensus.workspace = true
+
+# Cargo `package = ...` renames so ported Tempo source compiles verbatim.
+# `tempo-contracts` actually pulls in `sci-precompile-abi`; `tempo-precompiles-macros`
+# pulls in `sci-precompiles-macros`. See workspace Cargo.toml.
+tempo-chainspec.workspace = true
+tempo-contracts.workspace = true
+tempo-precompiles-macros.workspace = true
+
+[dev-dependencies]
+eyre.workspace = true
+proptest.workspace = true
+alloy-signer.workspace = true
+alloy-signer-local.workspace = true
+alloy-primitives = { workspace = true, features = ["rand"] }
+# Integration tests (tests/hook_e2e.rs) drive SciHandler through BaseEvm + InMemoryDB.
+# This is dev-only; the lib itself does not depend on base-common-evm (which would
+# create a cycle).
+base-common-evm.workspace = true
+# Needed by hook_e2e.rs to construct `BaseSpecId::new(BaseUpgrade::Isthmus)` (Base v0.9
+# replaced the v0.8 `BaseSpecId::ISTHMUS` const with this builder pattern).
+base-common-chains.workspace = true
+# Needed by hook_e2e.rs for the AA `Call` type carried in `AaTransactionParts`.
+base-common-consensus.workspace = true
+
+[features]
+default = []
+test-utils = []

@@ -1,0 +1,21 @@
+[package]
+name = "sci-precompile-abi"
+description = "SCI Chain precompile ABI bindings (alloy `sol!`) and predeploy address constants"
+
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { workspace = true, optional = true }
+alloy-primitives.workspace = true
+alloy-sol-types = { workspace = true, features = ["json"] }
+
+[features]
+default = ["std"]
+std = ["alloy-primitives/std", "alloy-sol-types/std", "serde?/std"]
+serde = ["dep:serde", "alloy-primitives/serde"]

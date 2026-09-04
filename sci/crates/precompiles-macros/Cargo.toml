@@ -1,0 +1,20 @@
+[package]
+name = "sci-precompiles-macros"
+description = "Procedural macros for SCI Chain precompile type-safe EVM storage abstractions"
+
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+quote.workspace = true
+syn = { workspace = true, features = ["full", "extra-traits"] }
+proc-macro2.workspace = true
+alloy-primitives.workspace = true

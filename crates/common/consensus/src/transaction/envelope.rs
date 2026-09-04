@@ -18,7 +18,7 @@ use alloy_serde::WithOtherFields;
 use revm::context::TxEnv;
 
 use crate::{
-    BasePooledTransaction, TxDeposit,
+    BaseAaTransaction, BasePooledTransaction, TxDeposit,
     transaction::{BaseTransactionInfo, DepositInfo},
 };
 
@@ -52,6 +52,9 @@ pub enum BaseTxEnvelope {
     #[envelope(ty = 126)]
     #[serde(serialize_with = "crate::serde_deposit_tx_rpc")]
     Deposit(Sealed<TxDeposit>),
+    /// A [`BaseAaTransaction`] (SCI account-abstraction tx) tagged with type 0x76.
+    #[envelope(ty = 118)]
+    Aa(Signed<BaseAaTransaction>),
 }
 
 /// Represents a transaction envelope for Base chains.
@@ -125,6 +128,12 @@ impl From<Signed<TxEip7702>> for BaseTxEnvelope {
     }
 }
 
+impl From<Signed<BaseAaTransaction>> for BaseTxEnvelope {
+    fn from(v: Signed<BaseAaTransaction>) -> Self {
+        Self::Aa(v)
+    }
+}
+
 impl From<TxDeposit> for BaseTxEnvelope {
     fn from(v: TxDeposit) -> Self {
         v.seal_slow().into()
@@ -152,6 +161,10 @@ impl From<Signed<BaseTypedTransaction>> for BaseTxEnvelope {
                 Self::Eip7702(tx)
             }
             BaseTypedTransaction::Deposit(tx) => Self::Deposit(Sealed::new_unchecked(tx, hash)),
+            BaseTypedTransaction::Aa(tx_aa) => {
+                let tx = Signed::new_unchecked(tx_aa, sig, hash);
+                Self::Aa(tx)
+            }
         }
     }
 }
@@ -199,6 +212,11 @@ impl FromRecoveredTx<BaseTxEnvelope> for TxEnv {
             BaseTxEnvelope::Eip2930(tx) => Self::from_recovered_tx(tx.tx(), caller),
             BaseTxEnvelope::Eip7702(tx) => Self::from_recovered_tx(tx.tx(), caller),
             BaseTxEnvelope::Deposit(tx) => Self::from_recovered_tx(tx.inner(), caller),
+            // PoC: execute the AA tx's first call as an EIP-1559 tx. Real batch
+            // execution + fee_payer charging is the Tempo handler's job (Phase 2).
+            BaseTxEnvelope::Aa(tx) => {
+                Self::from_recovered_tx(&tx.tx().to_eip1559_first_call(), caller)
+            }
         }
     }
 }
@@ -223,6 +241,7 @@ impl From<BaseTxEnvelope> for alloy_rpc_types_eth::TransactionRequest {
             BaseTxEnvelope::Eip7702(tx) => tx.into_parts().0.into(),
             BaseTxEnvelope::Deposit(tx) => tx.into_inner().into(),
             BaseTxEnvelope::Legacy(tx) => tx.into_parts().0.into(),
+            BaseTxEnvelope::Aa(tx) => tx.into_parts().0.to_eip1559_first_call().into(),
         }
     }
 }
@@ -321,17 +340,29 @@ impl BaseTxEnvelope {
             Self::Deposit(tx) => {
                 Err(ValueError::new(tx.into(), "Deposit transactions cannot be pooled"))
             }
+            // Plan A Phase 1: AA txs are poolable, but local-only — the validator rejects
+            // external-origin AA and disables propagation, so they never gossip to peers.
+            Self::Aa(tx) => Ok(tx.into()),
         }
     }
 
     /// Attempts to convert the envelope into the ethereum pooled variant.
     ///
-    /// Returns an error if the envelope's variant is incompatible with the pooled format:
-    /// [`TxDeposit`].
+    /// Returns an error if the envelope's variant is incompatible with the ethereum pooled
+    /// format: [`TxDeposit`] and the SCI AA transaction (neither has an alloy representation).
     pub fn try_into_eth_pooled(
         self,
     ) -> Result<alloy_consensus::transaction::PooledTransaction, ValueError<Self>> {
-        self.try_into_pooled().map(Into::into)
+        match self {
+            // AA has no alloy `PooledTransaction` representation; reject before the
+            // infallible `BasePooledTransaction -> alloy::PooledTransaction` conversion
+            // (which would otherwise be unreachable for AA) is reached.
+            tx @ Self::Aa(_) => Err(ValueError::new(
+                tx,
+                "AA transactions cannot be converted to an ethereum pooled transaction",
+            )),
+            other => other.try_into_pooled().map(Into::into),
+        }
     }
 
     /// Attempts to convert the L2 variant into an ethereum [`TxEnvelope`].
@@ -346,6 +377,10 @@ impl BaseTxEnvelope {
             tx @ Self::Deposit(_) => Err(ValueError::new(
                 tx,
                 "Deposit transactions cannot be converted to ethereum transaction",
+            )),
+            tx @ Self::Aa(_) => Err(ValueError::new(
+                tx,
+                "AA transactions cannot be converted to ethereum transaction",
             )),
         }
     }
@@ -385,13 +420,20 @@ impl BaseTxEnvelope {
     ///
     /// Caution: modifying this will cause side-effects on the hash.
     #[doc(hidden)]
-    pub const fn input_mut(&mut self) -> &mut Bytes {
+    pub fn input_mut(&mut self) -> &mut Bytes {
         match self {
             Self::Eip1559(tx) => &mut tx.tx_mut().input,
             Self::Eip2930(tx) => &mut tx.tx_mut().input,
             Self::Legacy(tx) => &mut tx.tx_mut().input,
             Self::Eip7702(tx) => &mut tx.tx_mut().input,
             Self::Deposit(tx) => &mut tx.inner_mut().input,
+            // AA carries a batch of calls; expose the first call's input for the
+            // hash-mutation test helper. Empty batches are rejected at pool admission
+            // (`ensure_aa_field_limits`), so reaching the expect means a caller
+            // constructed one in code.
+            Self::Aa(tx) => {
+                &mut tx.tx_mut().calls.first_mut().expect("AA batch must be non-empty").input
+            }
         }
     }
 
@@ -458,6 +500,14 @@ impl BaseTxEnvelope {
         }
     }
 
+    /// Returns the [`BaseAaTransaction`] variant if the transaction is an SCI AA transaction.
+    pub const fn as_aa(&self) -> Option<&BaseAaTransaction> {
+        match self {
+            Self::Aa(tx) => Some(tx.tx()),
+            _ => None,
+        }
+    }
+
     /// Return the reference to signature.
     ///
     /// Returns `None` if this is a deposit variant.
@@ -468,6 +518,7 @@ impl BaseTxEnvelope {
             Self::Eip1559(tx) => Some(tx.signature()),
             Self::Eip7702(tx) => Some(tx.signature()),
             Self::Deposit(_) => None,
+            Self::Aa(tx) => Some(tx.signature()),
         }
     }
 
@@ -479,6 +530,7 @@ impl BaseTxEnvelope {
             Self::Eip1559(_) => OpTxType::Eip1559,
             Self::Eip7702(_) => OpTxType::Eip7702,
             Self::Deposit(_) => OpTxType::Deposit,
+            Self::Aa(_) => OpTxType::Aa,
         }
     }
 
@@ -490,6 +542,7 @@ impl BaseTxEnvelope {
             Self::Eip2930(tx) => tx.hash(),
             Self::Eip7702(tx) => tx.hash(),
             Self::Deposit(tx) => tx.hash_ref(),
+            Self::Aa(tx) => tx.hash(),
         }
     }
 
@@ -506,6 +559,7 @@ impl BaseTxEnvelope {
             Self::Eip1559(t) => t.eip2718_encoded_length(),
             Self::Eip7702(t) => t.eip2718_encoded_length(),
             Self::Deposit(t) => t.eip2718_encoded_length(),
+            Self::Aa(t) => t.eip2718_encoded_length(),
         }
     }
 }
@@ -526,6 +580,7 @@ impl alloy_consensus::transaction::SignerRecoverable for BaseTxEnvelope {
             Self::Eip2930(tx) => tx.signature_hash(),
             Self::Eip1559(tx) => tx.signature_hash(),
             Self::Eip7702(tx) => tx.signature_hash(),
+            Self::Aa(tx) => tx.signature_hash(),
             // The Deposit transaction does not have a signature. Directly return the
             // `from` address.
             Self::Deposit(tx) => return Ok(tx.from),
@@ -535,6 +590,7 @@ impl alloy_consensus::transaction::SignerRecoverable for BaseTxEnvelope {
             Self::Eip2930(tx) => tx.signature(),
             Self::Eip1559(tx) => tx.signature(),
             Self::Eip7702(tx) => tx.signature(),
+            Self::Aa(tx) => tx.signature(),
             Self::Deposit(_) => unreachable!("Deposit transactions should not be handled here"),
         };
         alloy_consensus::crypto::secp256k1::recover_signer(signature, signature_hash)
@@ -548,6 +604,7 @@ impl alloy_consensus::transaction::SignerRecoverable for BaseTxEnvelope {
             Self::Eip2930(tx) => tx.signature_hash(),
             Self::Eip1559(tx) => tx.signature_hash(),
             Self::Eip7702(tx) => tx.signature_hash(),
+            Self::Aa(tx) => tx.signature_hash(),
             // The Deposit transaction does not have a signature. Directly return the
             // `from` address.
             Self::Deposit(tx) => return Ok(tx.from),
@@ -557,6 +614,7 @@ impl alloy_consensus::transaction::SignerRecoverable for BaseTxEnvelope {
             Self::Eip2930(tx) => tx.signature(),
             Self::Eip1559(tx) => tx.signature(),
             Self::Eip7702(tx) => tx.signature(),
+            Self::Aa(tx) => tx.signature(),
             Self::Deposit(_) => unreachable!("Deposit transactions should not be handled here"),
         };
         alloy_consensus::crypto::secp256k1::recover_signer_unchecked(signature, signature_hash)
@@ -579,6 +637,9 @@ impl alloy_consensus::transaction::SignerRecoverable for BaseTxEnvelope {
             Self::Eip7702(tx) => {
                 alloy_consensus::transaction::SignerRecoverable::recover_unchecked_with_buf(tx, buf)
             }
+            Self::Aa(tx) => {
+                alloy_consensus::transaction::SignerRecoverable::recover_unchecked_with_buf(tx, buf)
+            }
             Self::Deposit(tx) => Ok(tx.from),
         }
     }
@@ -587,6 +648,8 @@ impl alloy_consensus::transaction::SignerRecoverable for BaseTxEnvelope {
 /// Bincode-compatible serde implementation for [`BaseTxEnvelope`].
 #[cfg(all(feature = "serde", feature = "serde-bincode-compat"))]
 pub(super) mod serde_bincode_compat {
+    use alloc::borrow::Cow;
+
     use alloy_consensus::{
         Sealed, Signed,
         transaction::serde_bincode_compat::{TxEip1559, TxEip2930, TxEip7702, TxLegacy},
@@ -595,7 +658,7 @@ pub(super) mod serde_bincode_compat {
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
     use serde_with::{DeserializeAs, SerializeAs};
 
-    use crate::serde_bincode_compat::TxDeposit;
+    use crate::{BaseAaTransaction, serde_bincode_compat::TxDeposit};
 
     /// Bincode-compatible representation of an [`BaseTxEnvelope`].
     #[derive(Debug, Serialize, Deserialize)]
@@ -635,6 +698,16 @@ pub(super) mod serde_bincode_compat {
             /// Borrowed deposit transaction data.
             transaction: TxDeposit<'a>,
         },
+        /// SCI account-abstraction variant.
+        ///
+        /// The AA tx has no alloy zero-copy borrowed repr, so it rides a
+        /// [`Cow`]: borrowed on serialize, owned on deserialize.
+        Aa {
+            /// Transaction signature.
+            signature: Signature,
+            /// AA transaction data (borrowed on serialize, owned on deserialize).
+            transaction: Cow<'a, BaseAaTransaction>,
+        },
     }
 
     impl<'a> From<&'a super::BaseTxEnvelope> for BaseTxEnvelope<'a> {
@@ -660,6 +733,10 @@ pub(super) mod serde_bincode_compat {
                     hash: sealed_deposit.seal(),
                     transaction: sealed_deposit.inner().into(),
                 },
+                super::BaseTxEnvelope::Aa(signed_aa) => Self::Aa {
+                    signature: *signed_aa.signature(),
+                    transaction: Cow::Borrowed(signed_aa.tx()),
+                },
             }
         }
     }
@@ -681,6 +758,9 @@ pub(super) mod serde_bincode_compat {
                 }
                 BaseTxEnvelope::Deposit { hash, transaction } => {
                     Self::Deposit(Sealed::new_unchecked(transaction.into(), hash))
+                }
+                BaseTxEnvelope::Aa { signature, transaction } => {
+                    Self::Aa(Signed::new_unhashed(transaction.into_owned(), signature))
                 }
             }
         }
@@ -741,6 +821,45 @@ pub(super) mod serde_bincode_compat {
                     .unwrap();
             assert_eq!(decoded, data);
         }
+
+        /// Deterministic bincode round-trip for the AA envelope variant (the arbitrary
+        /// test above only exercises one random variant per run).
+        #[test]
+        fn test_aa_envelope_bincode_roundtrip() {
+            use alloy_primitives::{Signature, TxKind, U256, address};
+
+            #[serde_as]
+            #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+            struct Data {
+                #[serde_as(as = "BaseTxEnvelope<'_>")]
+                envelope: super::super::BaseTxEnvelope,
+            }
+
+            let aa = crate::BaseAaTransaction {
+                chain_id: 42001,
+                nonce: 9,
+                max_priority_fee_per_gas: 1,
+                max_fee_per_gas: 100,
+                gas_limit: 50_000,
+                calls: alloc::vec![crate::Call {
+                    to: TxKind::Call(address!("0x70997970C51812dc3A010C7d01b50e0d17dc79C8")),
+                    value: U256::from(777u64),
+                    input: alloy_primitives::Bytes::from_static(&[0xaa, 0xbb]),
+                }],
+                access_list: Default::default(),
+                fee_payer: Some(address!("0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266")),
+                root: Some(alloy_primitives::Address::repeat_byte(0x99)),
+            };
+            let sig = Signature::new(U256::from(1u64), U256::from(2u64), false);
+            let data =
+                Data { envelope: super::super::BaseTxEnvelope::Aa(Signed::new_unhashed(aa, sig)) };
+
+            let encoded = bincode::serde::encode_to_vec(&data, bincode::config::legacy()).unwrap();
+            let (decoded, _) =
+                bincode::serde::decode_from_slice::<Data, _>(&encoded, bincode::config::legacy())
+                    .unwrap();
+            assert_eq!(decoded, data);
+        }
     }
 }
 
@@ -752,6 +871,7 @@ impl InMemorySize for BaseTxEnvelope {
             Self::Eip1559(tx) => tx.size(),
             Self::Eip7702(tx) => tx.size(),
             Self::Deposit(tx) => tx.size(),
+            Self::Aa(tx) => tx.size(),
         }
     }
 }

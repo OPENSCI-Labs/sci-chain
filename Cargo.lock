@@ -3318,6 +3318,7 @@ dependencies = [
  "reth-evm",
  "revm",
  "rstest",
+ "sci-precompiles",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -4267,6 +4268,7 @@ dependencies = [
  "reth-storage-api",
  "reth-tasks",
  "reth-transaction-pool",
+ "sci-precompiles",
  "serde",
  "thiserror 2.0.18",
  "tokio",
@@ -4961,6 +4963,7 @@ dependencies = [
  "revm",
  "revm-precompile",
  "rkyv",
+ "sci-precompiles",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -19816,6 +19819,69 @@ dependencies = [
 ]
 
 [[package]]
+name = "sci-aa-txgen"
+version = "0.0.0"
+dependencies = [
+ "alloy-consensus",
+ "alloy-eips",
+ "alloy-primitives",
+ "alloy-signer",
+ "alloy-signer-local",
+ "base-common-consensus",
+]
+
+[[package]]
+name = "sci-precompile-abi"
+version = "0.9.0"
+dependencies = [
+ "alloy-primitives",
+ "alloy-sol-types",
+ "serde",
+]
+
+[[package]]
+name = "sci-precompiles"
+version = "0.9.0"
+dependencies = [
+ "alloy-consensus",
+ "alloy-evm",
+ "alloy-primitives",
+ "alloy-signer",
+ "alloy-signer-local",
+ "alloy-sol-types",
+ "base-common-chains",
+ "base-common-consensus",
+ "base-common-evm",
+ "derive_more 2.1.1",
+ "eyre",
+ "proptest",
+ "sci-precompile-abi",
+ "sci-precompiles-macros",
+ "sci-revm-shim",
+ "scoped-tls",
+ "tempo-chainspec-shim",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "sci-precompiles-macros"
+version = "0.9.0"
+dependencies = [
+ "alloy-primitives",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
+
+[[package]]
+name = "sci-revm-shim"
+version = "0.9.0"
+dependencies = [
+ "alloy-primitives",
+ "revm",
+]
+
+[[package]]
 name = "scoped-tls"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -21177,6 +21243,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "sp1-cuda"
+version = "6.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5d59fee6cc9cd3a9aedf0dfb79b157ea1e4597b4448bb2f40a549fdde16b2eaa"
+dependencies = [
+ "bincode 1.3.3",
+ "bytes",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "sp1-core-executor",
+ "sp1-core-machine",
+ "sp1-primitives",
+ "sp1-prover",
+ "sp1-prover-types",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "sp1-curves"
 version = "6.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -21560,6 +21647,7 @@ dependencies = [
  "sp1-core-executor",
  "sp1-core-executor-runner",
  "sp1-core-machine",
+ "sp1-cuda",
  "sp1-hypercube",
  "sp1-primitives",
  "sp1-prover",
@@ -22221,6 +22309,13 @@ dependencies = [
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "tempo-chainspec-shim"
+version = "0.9.0"
+dependencies = [
+ "revm",
 ]
 
 [[package]]

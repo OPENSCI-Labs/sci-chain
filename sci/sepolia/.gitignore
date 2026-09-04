@@ -1,0 +1,17 @@
+# Real-network secrets — NEVER commit. Sepolia uses real private keys
+# (the devnet test-junk mnemonic would get swept on a public testnet).
+.env
+*.env
+!*.env.example
+# merged runtime env (devnet-env + real Sepolia role private keys)
+*-runtime-env
+sepolia-runtime-env
+jwt.hex
+*.jwt
+keystore/
+keys/
+secrets/
+
+# Node data / sync state (lives on the server, not in the repo)
+data/
+*.log

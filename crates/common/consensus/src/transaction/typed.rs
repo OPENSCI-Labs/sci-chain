@@ -6,7 +6,7 @@ use alloy_eips::Encodable2718;
 use alloy_primitives::{B256, ChainId, Signature, TxHash, bytes::BufMut};
 
 pub use crate::transaction::envelope::BaseTypedTransaction;
-use crate::{BaseTxEnvelope, OpTxType, TxDeposit};
+use crate::{BaseAaTransaction, BaseTxEnvelope, OpTxType, TxDeposit};
 
 impl From<TxLegacy> for BaseTypedTransaction {
     fn from(tx: TxLegacy) -> Self {
@@ -38,6 +38,12 @@ impl From<TxDeposit> for BaseTypedTransaction {
     }
 }
 
+impl From<BaseAaTransaction> for BaseTypedTransaction {
+    fn from(tx: BaseAaTransaction) -> Self {
+        Self::Aa(tx)
+    }
+}
+
 impl From<BaseTxEnvelope> for BaseTypedTransaction {
     fn from(envelope: BaseTxEnvelope) -> Self {
         match envelope {
@@ -46,6 +52,7 @@ impl From<BaseTxEnvelope> for BaseTypedTransaction {
             BaseTxEnvelope::Eip1559(tx) => Self::Eip1559(tx.strip_signature()),
             BaseTxEnvelope::Eip7702(tx) => Self::Eip7702(tx.strip_signature()),
             BaseTxEnvelope::Deposit(tx) => Self::Deposit(tx.into_inner()),
+            BaseTxEnvelope::Aa(tx) => Self::Aa(tx.strip_signature()),
         }
     }
 }
@@ -59,6 +66,7 @@ impl From<BaseTypedTransaction> for alloy_rpc_types_eth::TransactionRequest {
             BaseTypedTransaction::Eip1559(tx) => tx.into(),
             BaseTypedTransaction::Eip7702(tx) => tx.into(),
             BaseTypedTransaction::Deposit(tx) => tx.into(),
+            BaseTypedTransaction::Aa(tx) => tx.to_eip1559_first_call().into(),
         }
     }
 }
@@ -72,6 +80,7 @@ impl BaseTypedTransaction {
             Self::Eip1559(_) => OpTxType::Eip1559,
             Self::Eip7702(_) => OpTxType::Eip7702,
             Self::Deposit(_) => OpTxType::Deposit,
+            Self::Aa(_) => OpTxType::Aa,
         }
     }
 
@@ -85,6 +94,7 @@ impl BaseTypedTransaction {
             Self::Eip1559(tx) => Some(tx.signature_hash()),
             Self::Eip7702(tx) => Some(tx.signature_hash()),
             Self::Deposit(_) => None,
+            Self::Aa(tx) => Some(tx.signature_hash()),
         }
     }
 
@@ -135,6 +145,7 @@ impl BaseTypedTransaction {
             Self::Eip1559(tx) => tx.tx_hash(signature),
             Self::Eip7702(tx) => tx.tx_hash(signature),
             Self::Deposit(tx) => tx.tx_hash(),
+            Self::Aa(tx) => tx.tx_hash(signature),
         }
     }
 
@@ -159,6 +170,10 @@ impl BaseTypedTransaction {
                 tx,
                 "Deposit transactions cannot be converted to ethereum transaction",
             )),
+            tx @ Self::Aa(_) => Err(ValueError::new(
+                tx,
+                "AA transactions cannot be converted to ethereum transaction",
+            )),
         }
     }
 }
@@ -171,6 +186,7 @@ impl RlpEcdsaEncodableTx for BaseTypedTransaction {
             Self::Eip1559(tx) => tx.rlp_encoded_fields_length(),
             Self::Eip7702(tx) => tx.rlp_encoded_fields_length(),
             Self::Deposit(tx) => tx.rlp_encoded_fields_length(),
+            Self::Aa(tx) => tx.rlp_encoded_fields_length(),
         }
     }
 
@@ -181,6 +197,7 @@ impl RlpEcdsaEncodableTx for BaseTypedTransaction {
             Self::Eip1559(tx) => tx.rlp_encode_fields(out),
             Self::Eip7702(tx) => tx.rlp_encode_fields(out),
             Self::Deposit(tx) => tx.rlp_encode_fields(out),
+            Self::Aa(tx) => tx.rlp_encode_fields(out),
         }
     }
 
@@ -191,6 +208,7 @@ impl RlpEcdsaEncodableTx for BaseTypedTransaction {
             Self::Eip1559(tx) => tx.eip2718_encode_with_type(signature, tx.ty(), out),
             Self::Eip7702(tx) => tx.eip2718_encode_with_type(signature, tx.ty(), out),
             Self::Deposit(tx) => tx.encode_2718(out),
+            Self::Aa(tx) => tx.eip2718_encode_with_type(signature, tx.ty(), out),
         }
     }
 
@@ -201,6 +219,7 @@ impl RlpEcdsaEncodableTx for BaseTypedTransaction {
             Self::Eip1559(tx) => tx.eip2718_encode(signature, out),
             Self::Eip7702(tx) => tx.eip2718_encode(signature, out),
             Self::Deposit(tx) => tx.encode_2718(out),
+            Self::Aa(tx) => tx.eip2718_encode(signature, out),
         }
     }
 
@@ -211,6 +230,7 @@ impl RlpEcdsaEncodableTx for BaseTypedTransaction {
             Self::Eip1559(tx) => tx.network_encode_with_type(signature, tx.ty(), out),
             Self::Eip7702(tx) => tx.network_encode_with_type(signature, tx.ty(), out),
             Self::Deposit(tx) => tx.network_encode(out),
+            Self::Aa(tx) => tx.network_encode_with_type(signature, tx.ty(), out),
         }
     }
 
@@ -221,6 +241,7 @@ impl RlpEcdsaEncodableTx for BaseTypedTransaction {
             Self::Eip1559(tx) => tx.network_encode(signature, out),
             Self::Eip7702(tx) => tx.network_encode(signature, out),
             Self::Deposit(tx) => tx.network_encode(out),
+            Self::Aa(tx) => tx.network_encode(signature, out),
         }
     }
 
@@ -231,6 +252,7 @@ impl RlpEcdsaEncodableTx for BaseTypedTransaction {
             Self::Eip1559(tx) => tx.tx_hash_with_type(signature, tx.ty()),
             Self::Eip7702(tx) => tx.tx_hash_with_type(signature, tx.ty()),
             Self::Deposit(tx) => tx.tx_hash(),
+            Self::Aa(tx) => tx.tx_hash_with_type(signature, tx.ty()),
         }
     }
 
@@ -241,6 +263,7 @@ impl RlpEcdsaEncodableTx for BaseTypedTransaction {
             Self::Eip1559(tx) => tx.tx_hash(signature),
             Self::Eip7702(tx) => tx.tx_hash(signature),
             Self::Deposit(tx) => tx.tx_hash(),
+            Self::Aa(tx) => tx.tx_hash(signature),
         }
     }
 }
@@ -253,6 +276,7 @@ impl SignableTransaction<Signature> for BaseTypedTransaction {
             Self::Eip1559(tx) => tx.set_chain_id(chain_id),
             Self::Eip7702(tx) => tx.set_chain_id(chain_id),
             Self::Deposit(_) => {}
+            Self::Aa(tx) => tx.set_chain_id(chain_id),
         }
     }
 
@@ -263,6 +287,7 @@ impl SignableTransaction<Signature> for BaseTypedTransaction {
             Self::Eip1559(tx) => tx.encode_for_signing(out),
             Self::Eip7702(tx) => tx.encode_for_signing(out),
             Self::Deposit(_) => {}
+            Self::Aa(tx) => tx.encode_for_signing(out),
         }
     }
 
@@ -273,6 +298,7 @@ impl SignableTransaction<Signature> for BaseTypedTransaction {
             Self::Eip1559(tx) => tx.payload_len_for_signature(),
             Self::Eip7702(tx) => tx.payload_len_for_signature(),
             Self::Deposit(_) => 0,
+            Self::Aa(tx) => tx.payload_len_for_signature(),
         }
     }
 
@@ -293,6 +319,7 @@ impl InMemorySize for BaseTypedTransaction {
             Self::Eip1559(tx) => tx.size(),
             Self::Eip7702(tx) => tx.size(),
             Self::Deposit(tx) => tx.size(),
+            Self::Aa(tx) => tx.size(),
         }
     }
 }

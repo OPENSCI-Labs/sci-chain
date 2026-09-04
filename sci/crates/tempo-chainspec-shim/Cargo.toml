@@ -1,0 +1,14 @@
+[package]
+name = "tempo-chainspec-shim"
+description = "SCI Chain compatibility shim that mirrors `tempo_chainspec::hardfork` so ported keychain source compiles verbatim. Internal-only; not a faithful re-implementation of Tempo's chainspec crate."
+
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+revm.workspace = true
