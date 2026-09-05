@@ -124,7 +124,7 @@ where
             // `caller` overridden to `root` and the per-call target/value/input).
             let frame_init = {
                 let ctx = evm.ctx_mut();
-                let mut memory = SharedMemory::new_with_buffer(std::rc::Rc::clone(
+                let mut memory = SharedMemory::new_with_buffer(alloc::rc::Rc::clone(
                     ctx.local().shared_memory_buffer(),
                 ));
                 memory.set_memory_limit(ctx.cfg().memory_limit());

@@ -44,7 +44,6 @@ tempo-precompiles-macros.workspace = true
 eyre.workspace = true
 proptest.workspace = true
 alloy-signer.workspace = true
-alloy-signer-local.workspace = true
 alloy-primitives = { workspace = true, features = ["rand"] }
 # Integration tests (tests/hook_e2e.rs) drive SciHandler through BaseEvm + InMemoryDB.
 # This is dev-only; the lib itself does not depend on base-common-evm (which would
