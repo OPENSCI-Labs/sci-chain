@@ -16,6 +16,6 @@ alloy-primitives.workspace = true
 alloy-sol-types = { workspace = true, features = ["json"] }
 
 [features]
-default = ["std"]
-std = ["alloy-primitives/std", "alloy-sol-types/std", "serde?/std"]
-serde = ["dep:serde", "alloy-primitives/serde"]
+default = [ "std" ]
+std = [ "alloy-primitives/std", "alloy-sol-types/std", "serde?/std" ]
+serde = [ "alloy-primitives/serde", "dep:serde" ]
