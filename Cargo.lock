@@ -19847,7 +19847,6 @@ dependencies = [
  "alloy-evm",
  "alloy-primitives",
  "alloy-signer",
- "alloy-signer-local",
  "alloy-sol-types",
  "base-common-chains",
  "base-common-consensus",

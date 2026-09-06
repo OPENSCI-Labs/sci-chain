@@ -7,7 +7,9 @@ on:
   workflow_dispatch: {}
 
 env:
-  REGISTRY_IMAGE: ghcr.io/${{ github.repository_owner }}/node-reth-dev
+  # GHCR requires lowercase image names; the org "OPENSCI-Labs" must be lowercased
+  # (`github.repository_owner` yields an invalid uppercase reference).
+  REGISTRY_IMAGE: ghcr.io/opensci-labs/node-reth-dev
 
 permissions:
   contents: read

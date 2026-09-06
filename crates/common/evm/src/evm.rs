@@ -22,9 +22,12 @@ use revm::{
     state::EvmState,
 };
 
+#[cfg(not(feature = "std"))]
+use crate::BaseHandler as EvmHandler;
+#[cfg(feature = "std")]
+use crate::SciHandler as EvmHandler;
 use crate::{
-    BaseContext, BaseHaltReason, BasePrecompiles, BaseSpecId, BaseTransaction,
-    BaseTransactionError, SciHandler,
+    BaseContext, BaseHaltReason, BasePrecompiles, BaseSpecId, BaseTransaction, BaseTransactionError,
 };
 
 /// Type alias for the inner [`RevmEvm`] parameterized with Base-specific context and fixed
@@ -221,7 +224,7 @@ where
 
     fn transact_one(&mut self, tx: Self::Tx) -> Result<Self::ExecutionResult, Self::Error> {
         self.inner.ctx.set_tx(tx);
-        let mut h = SciHandler::<_, _, EthFrame<EthInterpreter>>::new();
+        let mut h = EvmHandler::<_, _, EthFrame<EthInterpreter>>::new();
         h.run(self)
     }
 
@@ -232,7 +235,7 @@ where
     fn replay(
         &mut self,
     ) -> Result<ExecResultAndState<Self::ExecutionResult, Self::State>, Self::Error> {
-        let mut h = SciHandler::<_, _, EthFrame<EthInterpreter>>::new();
+        let mut h = EvmHandler::<_, _, EthFrame<EthInterpreter>>::new();
         h.run(self).map(|result| {
             let state = self.finalize();
             ExecResultAndState::new(result, state)
@@ -270,7 +273,7 @@ where
 
     fn inspect_one_tx(&mut self, tx: Self::Tx) -> Result<Self::ExecutionResult, Self::Error> {
         self.inner.ctx.set_tx(tx);
-        let mut h = SciHandler::<_, _, EthFrame<EthInterpreter>>::new();
+        let mut h = EvmHandler::<_, _, EthFrame<EthInterpreter>>::new();
         h.inspect_run(self)
     }
 }
@@ -305,7 +308,7 @@ where
             system_contract_address,
             data,
         ));
-        let mut h = SciHandler::<_, _, EthFrame<EthInterpreter>>::new();
+        let mut h = EvmHandler::<_, _, EthFrame<EthInterpreter>>::new();
 
         // load caller account into the journal (necessary for Geth proofs compatibility)
         // remove once https://github.com/bluealloy/revm/issues/3484 is fixed
@@ -335,7 +338,7 @@ where
             system_contract_address,
             data,
         ));
-        let mut h = SciHandler::<_, _, EthFrame<EthInterpreter>>::new();
+        let mut h = EvmHandler::<_, _, EthFrame<EthInterpreter>>::new();
 
         // load caller account into the journal (necessary for Geth proofs compatibility)
         // remove once https://github.com/bluealloy/revm/issues/3484 is fixed

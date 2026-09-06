@@ -56,7 +56,7 @@ sp1-cluster-utils.workspace = true
 # Enables SP1's local NVIDIA GPU prover (SP1_PROVER=cuda in `multi`). Off by default
 # because it pulls the CUDA toolchain + sp1-gpu docker dependency; opt in on a GPU box
 # with: cargo build --release -p base-proof-succinct-prove --bin multi --features cuda
-cuda = ["sp1-sdk/cuda"]
+cuda = [ "sp1-sdk/cuda" ]
 
 [dev-dependencies]
 reqwest = { version = "0.12.4", features = ["json"] }

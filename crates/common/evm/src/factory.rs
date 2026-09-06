@@ -38,8 +38,10 @@ impl EvmFactory for BaseEvmFactory {
         input: EvmEnv<BaseSpecId>,
     ) -> Self::Evm<DB, NoOpInspector> {
         let spec_id = input.cfg_env.spec;
+        #[cfg_attr(not(feature = "std"), allow(unused_mut))]
         let mut precompiles =
             PrecompilesMap::from_static(BasePrecompiles::new_with_spec(spec_id).precompiles());
+        #[cfg(feature = "std")]
         sci_precompiles::install(&mut precompiles, &input.cfg_env);
         Context::base()
             .with_db(db)
@@ -57,8 +59,10 @@ impl EvmFactory for BaseEvmFactory {
         inspector: I,
     ) -> Self::Evm<DB, I> {
         let spec_id = input.cfg_env.spec;
+        #[cfg_attr(not(feature = "std"), allow(unused_mut))]
         let mut precompiles =
             PrecompilesMap::from_static(BasePrecompiles::new_with_spec(spec_id).precompiles());
+        #[cfg(feature = "std")]
         sci_precompiles::install(&mut precompiles, &input.cfg_env);
         Context::base()
             .with_db(db)

@@ -1,5 +1,8 @@
 name: Mark stale issues and PRs
 
+# GitHub attributes schedule-triggered runs to the user who last edited this file.
+# Re-saving it here re-associates the daily run with an active maintainer instead of
+# a former collaborator.
 on:
   schedule:
     - cron: '30 0 * * *'
