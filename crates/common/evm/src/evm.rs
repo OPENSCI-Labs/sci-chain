@@ -22,15 +22,13 @@ use revm::{
     state::EvmState,
 };
 
-use crate::{
-    BaseContext, BaseHaltReason, BasePrecompiles, BaseSpecId, BaseTransaction,
-    BaseTransactionError,
-};
-
-#[cfg(feature = "std")]
-use crate::SciHandler as EvmHandler;
 #[cfg(not(feature = "std"))]
 use crate::BaseHandler as EvmHandler;
+#[cfg(feature = "std")]
+use crate::SciHandler as EvmHandler;
+use crate::{
+    BaseContext, BaseHaltReason, BasePrecompiles, BaseSpecId, BaseTransaction, BaseTransactionError,
+};
 
 /// Type alias for the inner [`RevmEvm`] parameterized with Base-specific context and fixed
 /// [`EthInstructions`] / [`EthFrame`], keeping [`BaseEvm`] field and constructor signatures tidy.
