@@ -25,7 +25,9 @@ pub use transaction::{
 mod handler;
 pub use handler::{BaseHandler, IsTxError};
 
+#[cfg(feature = "std")]
 mod sci_handler;
+#[cfg(feature = "std")]
 pub use sci_handler::SciHandler;
 
 mod precompiles;
