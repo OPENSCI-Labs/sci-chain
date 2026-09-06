@@ -36,6 +36,10 @@ env:
   CARGO_TERM_COLOR: always
   SCCACHE_GHA_ENABLED: "true"
   RUSTC_WRAPPER: "sccache"
+  # Authenticate the postgresql_archive build script's GitHub API calls (used by
+  # postgresql_embedded's `bundled` feature) so they don't hit the unauthenticated
+  # rate limit and fail with 403 Forbidden.
+  GITHUB_TOKEN: ${{ github.token }}
 
 permissions:
   checks: write
