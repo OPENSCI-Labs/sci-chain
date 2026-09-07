@@ -2,38 +2,55 @@
 
 # SCI Chain
 
-SCI Chain is an **agent-native Ethereum L2**, forked from Base (`base/base`, Azul v0.9).
-It adds a protocol-level permission sandbox for AI agents: keys, authorization, and
-spending limits are enforced by the chain itself, not by smart contracts.
+SCI Chain is the blockchain base layer of **OPENSCI**, the global open-science
+initiative of the **World Laureates Association (WLA)**. OPENSCI's mission is
+**scientist-led governance**: making research contributions — data, hypotheses,
+results — *attributable, traceable, and rewardable*, and shortening the basic-science
+discovery cycle with AI and blockchain.
+
+It is implemented today as an **agent-native Ethereum L2** — a fork of Base
+(`base/base`, Azul v0.9) whose execution layer enforces agent permissions (keys,
+authorization, spending limits) itself rather than through smart contracts. Its
+consensus layer targets **PoSR (Proof of Scientific Research)** as the long-term
+mechanism for on-chain trust in scientific contributions.
 
 Chain ID `42001` (testnet on Sepolia).
 
-## Why an agent-native L2
+## Where SCI Chain fits in OPENSCI
 
-Agents need to hold keys, spend money, and be stopped instantly when something goes
-wrong. A plain EVM L2 cannot express any of this as a protocol guarantee — agent keys
-end up in contracts (readable by anyone), permissions are app-level, and spending
-limits are advisory. SCI Chain moves these primitives into the execution layer so they
-are enforced, metered, and provable:
+OPENSCI has three layers; SCI Chain is the bottom one:
 
-1. **Native gas.** SCI is the chain's native gas token, so platform fees, agent-call
-   fees, and gas all settle in the same token and flow back to the treasury.
-2. **Chain-level compliance.** KYC, geo-fencing, and investor classification live at
-   the chain, not in an off-chain layer.
-3. **A billable agent market.** Third-party research agents are listed and called on a
-   per-invocation, SCI-denominated basis — this needs agent identity, authorization,
-   and limits to be protocol primitives.
+1. **SCI Chain** — the on-chain trust base (this repository).
+2. **ASCI** — a general-purpose scientific agent (autonomous reasoning, literature
+   retrieval, experiment optimization) that runs on SCI Chain.
+3. **Application layer** — OpenGrants (decentralized research funding), OpenWorld
+   (AI-driven collaboration), IDA Layer (result assetization), and SCI Network
+   (collaboration and impact tracking).
+
+## Why agent-native
+
+Scientific agents must hold keys, spend money, and be stopped instantly when
+something goes wrong. A plain EVM L2 cannot express any of this as a protocol
+guarantee — agent keys end up in contracts (readable by anyone), permissions are
+app-level, and spending limits are advisory. To let agents like ASCI do research
+autonomously while staying governable, SCI Chain moves these primitives into the
+execution layer so they are enforced, metered, and provable:
+
+1. **Protocol-level permissions.** Keys, authorization, and spending limits live in
+   the chain (keychain precompile + pre-execution hook), not in contracts.
+2. **Native gas.** SCI is the chain's native gas token, so fees, agent-call costs,
+   and gas settle in one token and flow back to the treasury.
 
 ## Architecture
 
 ```
-Agent (session key) ──► MPP Gateway (JSON-RPC) ──► SCI Chain (Base Azul v0.9 fork)
-                                                     │  AA tx type 0x76: calls[] + fee_payer
-                                                     ├─ Pre-execution hook:
-                                                     │    CircuitBreaker → Scope → SpendingLimit
-                                                     ├─ Precompile 0xAAAA…00: AccountKeychain
-                                                     ├─ Precompile 0xAAAA…01: SciAgentState
-                                                     └─ Predeploys 0xBBBB…01/02/03: Registry / Budget / Breaker
+Agent (session key) ──► SCI Chain (Base Azul v0.9 fork)
+                        │  AA tx type 0x76: calls[] + fee_payer
+                        ├─ Pre-execution hook:
+                        │    CircuitBreaker → Scope → SpendingLimit
+                        ├─ Precompile 0xAAAA…00: AccountKeychain
+                        ├─ Precompile 0xAAAA…01: SciAgentState
+                        └─ Predeploys 0xBBBB…01/02/03: Registry / Budget / Breaker
 ```
 
 ## The three core pieces
@@ -81,7 +98,7 @@ already implemented the equivalents, so SCI borrowed rather than re-implemented:
 - **Native gas** — SCI as the native gas token via OP-Stack CGT v2.
 - **Agent contracts** — `sci/contracts`: `AgentAccessKeyRegistry`,
   `AgentCircuitBreaker`, `AgentBudgetController`.
-- **MPP (Machine Payments Protocol)** — planned agent access layer (scaffolded only).
+- **MPP (Machine Payments Protocol)** — agent access layer (planned).
 
 ## Build
 
