@@ -27,10 +27,7 @@ ensure-elfs:
             result=$(python3 "$script" "$manifest" "$cache_dir")
             if [ "$result" != "match" ]; then
                 echo "error: freshly built ELFs do not match manifest.toml ($result)." >&2
-                echo "       Freshly built ELF hashes for manifest.toml:" >&2
-                python3 "$script" --write "$manifest" "$cache_dir"
-                cat "$manifest" >&2
-                echo "       If this is a legitimate change, update manifest.toml and commit." >&2
+                echo "       If this is a legitimate change, run 'just succinct write-manifest' and commit." >&2
                 exit 1
             fi
             ;;
