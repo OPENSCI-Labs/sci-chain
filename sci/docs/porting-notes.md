@@ -23,9 +23,11 @@ At the time (mid-2026), Base had not shipped its own native account abstraction
 (EIP-8130) or native token standard (B20), so SCI borrowed Tempo's design rather than
 re-implementing it.
 
-The port is not a fork of Tempo — it is a **verbatim copy of Tempo's business source,
-adapted to Base's older revm version through a compatibility shim**, plus a
-self-written pre-execution hook that Tempo does not have.
+The port is not a fork of Tempo — it is a **near-verbatim adaptation of Tempo's business
+source, ported to Base's older revm version through a compatibility shim** (plus a
+self-written pre-execution hook that Tempo does not have). See
+`THIRD_PARTY_NOTICES.md` at the repository root for attribution and the derived-file
+list.
 
 ### Version map
 
@@ -97,11 +99,13 @@ packed into a single storage slot to save SLOAD/SSTORE.
    "what the agent spent" is covered by Base's multi-proof (Kona / TEE / ZK) like any
    other state.
 
-### Porting strategy: verbatim + pinned patches
+### Porting strategy: near-verbatim port + pinned patches
 
 The keychain business source (`account_keychain/{mod,dispatch}.rs`, `storage/*.rs`,
-the proc macros, and the ABI bindings) is copied **verbatim** from Tempo v1.7.1. Two
-mechanisms make verbatim work:
+the proc macros, and the ABI bindings) is **adapted** from Tempo v1.7.1 — near-verbatim
+for the business logic, with import reordering, revm 34 compatibility work (heaviest in
+`storage/evm.rs`), and test-harness adjustments accounting for the remaining diff
+(~15% of lines). Two mechanisms keep that diff minimal:
 
 - **Cargo `package =` renames** route upstream identifiers to SCI crates without
   source edits: `tempo_precompiles_macros` → `sci-precompiles-macros`,
@@ -305,7 +309,7 @@ Tempo ships a new release (e.g. v1.7.2):
 ```
 
 The combination of Cargo `package =` renames and the `revm-shim` means the business
-source is copied verbatim — identifier rewrites are no longer needed. Only the pinned
+source is copied near-verbatim — identifier rewrites are no longer needed. Only the pinned
 patch list needs re-applying, which keeps upstream sync tractable.
 
 ---

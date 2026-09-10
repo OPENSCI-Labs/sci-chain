@@ -1,8 +1,9 @@
 //! SCI-specific extensions to [`AccountKeychain`].
 //!
-//! Tempo source files (`mod.rs`, `dispatch.rs`) stay verbatim per CLAUDE.md Rule #4 so
-//! upstream syncs can `cp` files in unmodified. Anything SCI-only goes here; the only
-//! Tempo-source edit is the single `mod sci_ext;` line at the bottom of `mod.rs`
+//! Tempo source files (`mod.rs`, `dispatch.rs`) stay near-verbatim per CLAUDE.md Rule #4
+//! (pinned SCI patches only) so upstream syncs remain a small re-applied patch set.
+//! Anything SCI-only goes here; the only structural Tempo-source edit is the single
+//! `mod sci_ext;` declaration in `mod.rs`
 //! (documented in CLAUDE.md's Upstream Tempo Sync section).
 //!
 //! Currently exposes [`AccountKeychain::key_is_active`], a public wrapper around the

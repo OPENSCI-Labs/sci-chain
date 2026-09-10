@@ -33,7 +33,7 @@ alloy-primitives.workspace = true
 alloy-sol-types = { workspace = true, features = ["std"] }
 alloy-consensus.workspace = true
 
-# Cargo `package = ...` renames so ported Tempo source compiles verbatim.
+# Cargo `package = ...` renames so ported Tempo source compiles with minimal edits.
 # `tempo-contracts` actually pulls in `sci-precompile-abi`; `tempo-precompiles-macros`
 # pulls in `sci-precompiles-macros`. See workspace Cargo.toml.
 tempo-chainspec.workspace = true

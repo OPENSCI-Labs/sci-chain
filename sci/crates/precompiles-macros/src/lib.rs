@@ -6,6 +6,9 @@
 //! - `storable_alloy_ints!` macro for generating alloy integer storage implementations
 //! - `storable_alloy_bytes!` macro for generating alloy `FixedBytes` storage implementations
 //! - `storable_rust_ints!` macro for generating standard Rust integer storage implementations
+//!
+//! Adapted from tempoxyz/tempo v1.7.1 (MIT OR Apache-2.0, Copyright (c) 2025
+//! Tempo Contributors) — see `THIRD_PARTY_NOTICES.md` at the repository root.
 
 #![allow(clippy::option_if_let_else)]
 

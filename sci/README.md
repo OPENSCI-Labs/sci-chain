@@ -13,7 +13,7 @@ Everything SCI adds to Base Azul v0.9 lives under this directory. See the top-le
   - `precompiles-macros/` — proc macros (`#[contract]`, `#[derive(Storable)]`).
   - `precompile-abi/` — ABI bindings for the precompiles (alloy `sol!`).
   - `revm-shim/` — compat shim exposing revm 38's API on Base v0.9's revm 34.
-  - `tempo-chainspec-shim/` — exposes `TempoHardfork` so verbatim Tempo source compiles.
+  - `tempo-chainspec-shim/` — exposes `TempoHardfork` so ported Tempo source compiles.
 - `contracts/` — Solidity (Foundry): agent infrastructure contracts.
 - `gateway/` — TypeScript: MPP server + REST API (scaffolded).
 - `devnet/` — genesis patch + custom allocs.
