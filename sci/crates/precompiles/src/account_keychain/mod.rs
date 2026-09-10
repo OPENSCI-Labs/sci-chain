@@ -10,7 +10,7 @@ pub mod dispatch;
 
 // SCI-only extension module exposing public wrappers over crate-private
 // helpers (e.g. `load_active_key` → `key_is_active`) for the pre-execution
-// hook. Lives next to verbatim Tempo `mod.rs` so an upstream Tempo sync
+// hook. Lives next to the near-verbatim Tempo `mod.rs` so an upstream Tempo sync
 // (`cp tempo/.../mod.rs sci/.../mod.rs`) only needs this single line
 // re-injected. See `sci_ext.rs` for the rationale.
 mod sci_ext;

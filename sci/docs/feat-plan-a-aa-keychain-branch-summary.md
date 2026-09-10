@@ -72,11 +72,11 @@ envelope and every variant match site):
 
 ## 2. SCI Rust crates (`sci/crates/`, `sci/tools/`)
 
-- `precompiles/` — `AccountKeychain` (Tempo v1.7.1, verbatim + documented SCI patches), the
+- `precompiles/` — `AccountKeychain` (Tempo v1.7.1, near-verbatim port + documented SCI patches), the
   SCI-only `SciAgentState` CB precompile, and the **AA-native pre-execution hook**
   (`handler/{mod,hook,decode}.rs`: `run_aa_keychain_hook` + `apply_aa_post_execution_deductions`
   + `classify_token_call`). `install()` registers the keychain precompile.
-- `precompiles-macros/` — `#[contract]` / `#[derive(Storable)]` proc macros (verbatim Tempo).
+- `precompiles-macros/` — `#[contract]` / `#[derive(Storable)]` proc macros (Tempo v1.7.1 port).
 - `precompile-abi/` — `IAccountKeychain` bindings + ERC-20/SCI-20 selectors (`predeploys/erc20`).
 - `revm-shim/` — exposes the revm-38-shape `PrecompileOutput`/`PrecompileHalt`/state-gas API on
   top of Base's revm 34 (scoped to `sci-precompiles` only).

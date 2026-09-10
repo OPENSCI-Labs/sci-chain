@@ -6,6 +6,12 @@
 //! (SCI-only `CircuitBreaker` trip state, at
 //! [`tempo_contracts::precompiles::SCI_AGENT_STATE_ADDRESS`]).
 //!
+//! `AccountKeychain` (including its dispatch layer and the `sci-precompiles-macros` /
+//! `sci-precompile-abi` support crates) is adapted from tempoxyz/tempo v1.7.1
+//! (MIT OR Apache-2.0, Copyright (c) 2025 Tempo Contributors) — see
+//! `THIRD_PARTY_NOTICES.md` at the repository root for the derived-file list and
+//! license text.
+//!
 //! ## revm shim
 //!
 //! This crate depends on `revm` via the `sci-revm-shim` Cargo `package = ...` rename

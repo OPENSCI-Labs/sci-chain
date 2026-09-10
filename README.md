@@ -70,8 +70,8 @@ Base Azul v0.9 pins revm 34; the ported Tempo source targets revm 38 (the EIP-80
 state-gas release). Rather than rewrite Tempo's code, a 484-line additive shim
 (`sci/crates/revm-shim`) re-exports revm 34 verbatim and shadows only the two modules
 revm 38 changed (`precompile`, `interpreter::gas`), folding outputs back at the
-boundary via `to_revm34`. This keeps the ported business source verbatim and isolates
-SCI from Tempo's later revm upgrades. See `sci/docs/porting-notes.md`.
+boundary via `to_revm34`. This keeps the ported business source close to upstream and
+isolates SCI from Tempo's later revm upgrades. See `sci/docs/porting-notes.md`.
 
 ### Pre-execution hook — the sandbox gate
 
@@ -87,7 +87,9 @@ When SCI Chain was built (mid-2026), Base had not yet shipped native account
 abstraction (EIP-8130) or a native token standard (B20). Tempo (`tempoxyz/tempo`) had
 already implemented the equivalents, so SCI borrowed rather than re-implemented:
 
-- **Keychain precompile** — ported verbatim from Tempo v1.7.1 via `revm-shim`.
+- **Keychain precompile** — adapted from Tempo v1.7.1 via `revm-shim` (see
+  [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) for the derived-file list and
+  license attribution).
 - **Token interface** — Tempo's TIP-20 mapped to standard ERC-20 (SCI does not ship a
   TIP-20 factory).
 

@@ -5,7 +5,8 @@
 Scope of the audit: the native AA transaction type (`0x76`, `BaseAaTransaction`) and the
 keychain pre-execution hook that gates it. These are the only consensus-critical additions
 of Plan A — everything else (the keychain precompile internals, shim crates) is either a
-verbatim Tempo port or non-consensus. This note lists the files, the invariants reviewers
+Tempo v1.7.1 port (adapted, not verbatim — see `porting-notes.md` and
+`THIRD_PARTY_NOTICES.md`) or non-consensus. This note lists the files, the invariants reviewers
 should confirm, the known intentional divergences, and the evidence gathered so far.
 
 ## 1. Transaction type: decode / encode / signing

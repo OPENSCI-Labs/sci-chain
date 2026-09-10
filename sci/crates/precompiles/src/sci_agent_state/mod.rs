@@ -6,7 +6,7 @@
 //! allowed to mutate this state; reads are open.
 //!
 //! Putting this state here (rather than inside [`AccountKeychain`]) preserves CLAUDE.md
-//! Rule #4 — Tempo source files stay verbatim. New SCI-only protocol state (attribution
+//! Rule #4 — Tempo source files stay near-verbatim. New SCI-only protocol state (attribution
 //! counters, MPP session info, …) can be added as additional fields on this struct over
 //! time without touching ported files.
 

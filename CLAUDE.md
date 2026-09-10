@@ -169,7 +169,11 @@ sci-chain/
 3. **Tempo code is reference only**. Source is at `/home/gavin/opensci/sci-dev/tempo/`
    (an earlier draft of this guide listed `~/sci-dev/Tempo-ref/` — that path does not exist
    on this machine). Copy and adapt, never import as a git dependency.
-4. **Namespace convention — verbatim Tempo source, SCI-facing API via aliases + shim crates.**
+4. **Namespace convention — near-verbatim Tempo source, SCI-facing API via aliases + shim crates.**
+   Ported files are *adapted*, not byte-identical (import reordering, revm 34 work in
+   `storage/evm.rs`, test tweaks). Public-facing docs and papers must describe the port
+   as "adapted from tempoxyz/tempo v1.7.1 (MIT OR Apache-2.0)" and point to
+   `THIRD_PARTY_NOTICES.md` — never "copied verbatim".
    To keep upstream Tempo merges tractable, **ported Tempo source files use Tempo names
    internally** (`tempo_chainspec::hardfork::TempoHardfork`, `tempo_contracts::*`,
    `tempo_precompiles_macros::*`, `TempoPrecompileError`). Those names route to our
@@ -430,7 +434,8 @@ mod sci_ext;
 `sci_ext.rs` (SCI-only sibling) holds an `impl AccountKeychain` block exposing
 `key_is_active(account, key_id) -> Result<bool>` — a public wrapper around the
 crate-private `load_active_key` used by the pre-execution hook. The rest of
-`account_keychain/mod.rs` stays verbatim from upstream Tempo.
+`account_keychain/mod.rs` stays a near-verbatim port of upstream Tempo (pinned SCI
+patches only).
 
 ## Build Commands
 
@@ -492,7 +497,7 @@ just devnet status
   alias), trimmed SCI variant subset, `IntoPrecompileResult` trait, From-impls
   for `JournalLoadError<EvmInternalsError>` and `JournalLoadError<ErasedError>`.
 - `sci/crates/precompiles/src/account_keychain/mod.rs` — Core keychain logic from
-  Tempo v1.7.1 (~4900 lines including T5 witness API). Verbatim except SCI patches
+  Tempo v1.7.1 (~4900 lines including T5 witness API). Near-verbatim; SCI patches
   enumerated in Critical Rule #5.
 - `sci/crates/precompiles/src/account_keychain/dispatch.rs` — ABI selector routing
   (T3 + T5 schedules).
@@ -511,7 +516,7 @@ just devnet status
 - `sci/crates/precompiles/src/test_util.rs` — selector-coverage + word-from-hex helpers
   + `TIP20Setup` no-op stub.
 - `sci/crates/precompiles-macros/src/{lib,storable,storable_primitives,packing,layout,utils}.rs`
-  — Proc macros `#[contract]`, `#[derive(Storable)]` (verbatim from Tempo v1.7.1;
+  — Proc macros `#[contract]`, `#[derive(Storable)]` (near-verbatim port from Tempo v1.7.1;
   alloy umbrella paths → individual crates via sed at sync time, including the new
   `aliases::U96` etc. paths added in v1.7.1).
 - `sci/crates/precompile-abi/src/precompiles/account_keychain.rs` — `IAccountKeychain`
@@ -621,7 +626,7 @@ CB trip state lives in a new Rust precompile, **not** inside `AccountKeychain` a
 - **Solidity façade**: `AgentCircuitBreaker.sol` at `0xBBBB...03` (Heath's lane)
   handles admin access control + events, forwards to `SciAgentState.tripKey()`.
 
-**Why not in keychain.** Preserves CLAUDE.md Rule #4 (verbatim Tempo source) —
+**Why not in keychain.** Preserves CLAUDE.md Rule #4 (near-verbatim Tempo source) —
 adding a `tripped` mapping to `AccountKeychain` would create a permanent SCI-only
 patch to re-apply on every Tempo upstream sync. `SciAgentState` is a clean home
 for SCI-only protocol state (CB now, MPP session / attribution counters / etc.
